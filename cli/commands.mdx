@@ -65,6 +65,60 @@ Configuration is stored at `~/.config/light/config.json` by default. Override wi
 
 ---
 
+### init
+
+Initialize a new compressed account project from a template.
+
+```bash
+light init <name>
+```
+
+<ParamField path="name" type="string" required>
+  The name of the project. Will be converted to kebab-case for directory name, snake_case for Rust, and PascalCase for types.
+</ParamField>
+
+<CodeGroup>
+
+```bash Create Project
+light init my-compressed-app
+```
+
+```bash Output
+Initializing project...
+✅ Project initialized successfully
+
+cd my-compressed-app
+```
+
+</CodeGroup>
+
+**What gets created:**
+
+The init command scaffolds a complete Solana program project with:
+- Anchor program with Light Protocol integration
+- TypeScript client with `@lightprotocol/stateless.js` setup
+- Test suite configuration
+- All required dependencies at compatible versions
+
+<Tip>
+On macOS, you may need to set CPATH before building:
+```bash
+echo 'export CPATH="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include:$CPATH"' >> ~/.zshrc && source ~/.zshrc
+```
+</Tip>
+
+**Project structure:**
+```
+my-compressed-app/
+├── programs/           # Anchor programs
+├── app/               # TypeScript client
+├── tests/             # Integration tests
+├── Anchor.toml        # Anchor configuration
+└── package.json       # Node dependencies
+```
+
+---
+
 ## Token Management
 
 ### create-mint
