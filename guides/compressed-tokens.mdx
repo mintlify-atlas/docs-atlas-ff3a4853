@@ -1,0 +1,504 @@
+---
+title: 'Building with Compressed Tokens'
+description: 'Learn how to create, transfer, and manage compressed SPL tokens'
+---
+
+Compressed tokens on Light Protocol provide the same functionality as SPL tokens while reducing on-chain storage costs by up to 10,000x. This guide shows you how to build applications using compressed tokens.
+
+## Overview
+
+Compressed tokens are compatible with SPL Token 2022 extensions and maintain full composability with other programs. They use zero-knowledge proofs to compress token account state into Merkle trees.
+
+### Key Features
+
+- **Cost Efficient**: Store token accounts at ~0.00001 SOL vs ~0.002 SOL for regular tokens
+- **Full SPL Token 2022 Support**: Works with transfer fees, transfer hooks, and other extensions
+- **Composable**: Integrate seamlessly with other programs through CPIs
+- **No Compromises**: Same security, performance, and developer experience
+
+## Creating a Compressed Token Account
+
+To create a compressed token account, you need to specify compression parameters:
+
+<CodeGroup>
+
+```typescript JavaScript
+import { 
+  createRpc,
+  CompressedTokenProgram 
+} from '@lightprotocol/stateless.js';
+import { Keypair } from '@solana/web3.js';
+
+const rpc = createRpc(
+  "http://127.0.0.1:8899",
+  "http://127.0.0.1:8784",
+  "http://127.0.0.1:3001"
+);
+
+const payer = Keypair.generate();
+const tokenAccount = Keypair.generate();
+const mint = new PublicKey("...");
+
+// Create compressed token account
+const createIx = await CompressedTokenProgram.createTokenAccount({
+  payer: payer.publicKey,
+  account: tokenAccount.publicKey,
+  mint: mint,
+  owner: payer.publicKey,
+});
+
+const tx = new Transaction().add(createIx);
+await rpc.sendTransaction(tx, [payer, tokenAccount]);
+```
+
+```rust Rust (light-token)
+use light_token::instruction::{
+    CompressibleParams,
+    CreateTokenAccount,
+};
+use light_token_interface::state::TokenDataVersion;
+
+// Define compression parameters
+let compressible_params = CompressibleParams {
+    compressible_config: compressible_config_pda,
+    rent_sponsor: rent_sponsor_pda,
+    pre_pay_num_epochs: 2,
+    lamports_per_write: Some(100),
+    compress_to_account_pubkey: None,
+    token_account_version: TokenDataVersion::ShaFlat,
+    compression_only: false,
+};
+
+// Create token account instruction
+let create_ix = CreateTokenAccount::new(
+    payer.pubkey(),
+    token_account.pubkey(),
+    mint.pubkey(),
+    owner.pubkey(),
+)
+.with_compressible(compressible_params)
+.instruction()?;
+
+rpc.create_and_send_transaction(
+    &[create_ix],
+    &payer.pubkey(),
+    &[&payer, &token_account],
+)
+.await?;
+```
+
+</CodeGroup>
+
+<Tip>
+**Compression Parameters**: The `pre_pay_num_epochs` determines how many write operations are pre-funded. Set this based on your application's expected activity level.
+</Tip>
+
+## Transferring Compressed Tokens
+
+Token transfers work similarly to SPL Token, with the source and destination accounts automatically handled:
+
+<CodeGroup>
+
+```rust Rust Test Example
+use light_compressed_token;
+use anchor_lang::prelude::AccountMeta;
+use solana_sdk::instruction::Instruction;
+
+// Build transfer instruction: discriminator (3) + amount (8 bytes)
+let mut data = vec![3u8];
+data.extend_from_slice(&amount.to_le_bytes());
+
+let transfer_ix = Instruction {
+    program_id: light_compressed_token::ID,
+    accounts: vec![
+        AccountMeta::new(source, false),
+        AccountMeta::new(destination, false),
+        AccountMeta::new(authority, true), // Must sign and be writable
+    ],
+    data,
+};
+
+// Execute transfer
+context
+    .rpc
+    .create_and_send_transaction(
+        &[transfer_ix],
+        &payer_pubkey,
+        &[&payer, &authority],
+    )
+    .await?;
+```
+
+```typescript TypeScript
+import { CompressedTokenProgram } from '@lightprotocol/stateless.js';
+
+// Create transfer instruction
+const transferIx = await CompressedTokenProgram.transfer({
+  source: sourceAccount,
+  destination: destinationAccount,
+  amount: 1000000,
+  authority: owner.publicKey,
+});
+
+const tx = new Transaction().add(transferIx);
+await rpc.sendTransaction(tx, [owner]);
+```
+
+</CodeGroup>
+
+<Warning>
+**Authority Must Be Writable**: The transfer authority account must be writable because compressible accounts may require automatic top-ups during the transaction.
+</Warning>
+
+## Batch Compression
+
+Batch compress multiple token accounts in a single transaction for efficient on-chain operations:
+
+```rust Rust SDK
+use light_token_sdk::{
+    create_batch_compress_instruction,
+    BatchCompressInputs,
+    Recipient,
+};
+
+let recipients = vec![
+    Recipient {
+        pubkey: recipient1_pubkey,
+        amount: 1000,
+    },
+    Recipient {
+        pubkey: recipient2_pubkey,
+        amount: 2000,
+    },
+];
+
+let batch_compress_ix = create_batch_compress_instruction(
+    BatchCompressInputs {
+        fee_payer: payer.pubkey(),
+        authority: authority.pubkey(),
+        spl_interface_pda,
+        sender_token_account,
+        token_program: token_2022::ID,
+        merkle_tree,
+        recipients,
+        lamports: None,
+        token_pool_index: 0,
+        token_pool_bump: 255,
+        sol_pool_pda: None,
+    }
+)?;
+
+rpc.create_and_send_transaction(
+    &[batch_compress_ix],
+    &payer.pubkey(),
+    &[&payer, &authority],
+)
+.await?;
+```
+
+## Working with Token Extensions
+
+### Default Account State
+
+Light Protocol supports SPL Token 2022's DefaultAccountState extension:
+
+```rust Default Account State
+use light_token_interface::state::{AccountState, Token};
+use borsh::BorshDeserialize;
+
+// Deserialize the token account
+let token_account = Token::deserialize(&mut &account.data[..])?;
+
+// Check account state
+match token_account.state {
+    AccountState::Uninitialized => println!("Not initialized"),
+    AccountState::Initialized => println!("Active account"),
+    AccountState::Frozen => println!("Frozen account"),
+}
+
+// Access extensions
+if let Some(extensions) = &token_account.extensions {
+    for ext in extensions {
+        match ext {
+            ExtensionStruct::Compressible(info) => {
+                println!("Compression info: {:?}", info);
+            },
+            ExtensionStruct::PausableAccount(_) => {
+                println!("Account is pausable");
+            },
+            ExtensionStruct::PermanentDelegateAccount(_) => {
+                println!("Has permanent delegate");
+            },
+            _ => {}
+        }
+    }
+}
+```
+
+### Transfer Fees
+
+Compressed tokens support transfer fees with automatic fee calculation:
+
+```rust Transfer Fee Extension
+use spl_token_2022::extension::transfer_fee::TransferFee;
+
+// The compressed token program automatically:
+// 1. Calculates transfer fees from mint configuration
+// 2. Deducts fees from transfer amount
+// 3. Credits fees to the fee authority
+
+// No additional code needed - fees are handled transparently
+let transfer_ix = build_transfer_instruction(
+    source,
+    destination,
+    amount, // Gross amount (fees deducted automatically)
+    authority.pubkey(),
+);
+```
+
+## Querying Compressed Token Accounts
+
+Use the RPC client to query compressed token balances and account data:
+
+<CodeGroup>
+
+```typescript JavaScript
+import { createRpc } from '@lightprotocol/stateless.js';
+
+const rpc = createRpc(
+  "http://127.0.0.1:8899",
+  "http://127.0.0.1:8784"
+);
+
+// Get token accounts by owner
+const accounts = await rpc.getCompressedTokenAccountsByOwner(
+  ownerPublicKey,
+  { mint: mintPublicKey }
+);
+
+accounts.forEach(account => {
+  console.log(`Balance: ${account.parsed.amount}`);
+  console.log(`Mint: ${account.parsed.mint}`);
+});
+```
+
+```rust Rust Client
+use light_client::{Rpc, indexer::Indexer};
+
+// Get compressed accounts by owner
+let accounts = rpc
+    .indexer()?
+    .get_compressed_accounts_by_owner(&owner_pubkey)
+    .await?;
+
+for account in accounts {
+    println!("Account: {:?}", account);
+}
+```
+
+</CodeGroup>
+
+## Testing Compressed Tokens
+
+Use `light-program-test` for fast local testing:
+
+```rust Test Example
+use light_program_test::{LightProgramTest, ProgramTestConfig};
+use solana_sdk::signer::Signer;
+
+#[tokio::test]
+async fn test_compressed_token_transfer() {
+    // Initialize test environment with V2 trees
+    let config = ProgramTestConfig::new_v2(true, None);
+    let mut rpc = LightProgramTest::new(config).await.unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Create mint and token accounts
+    let mint = create_mint(&mut rpc, &payer, 9).await;
+    let source = create_token_account(&mut rpc, &payer, mint).await;
+    let destination = create_token_account(&mut rpc, &payer, mint).await;
+
+    // Mint tokens to source
+    mint_tokens(&mut rpc, &payer, mint, source, 1000).await;
+
+    // Transfer tokens
+    let transfer_ix = build_transfer_instruction(
+        source,
+        destination,
+        500,
+        payer.pubkey(),
+    );
+
+    rpc.create_and_send_transaction(
+        &[transfer_ix],
+        &payer.pubkey(),
+        &[&payer],
+    )
+    .await
+    .unwrap();
+
+    // Assert balances
+    let source_account = rpc.get_account(source).await.unwrap().unwrap();
+    let dest_account = rpc.get_account(destination).await.unwrap().unwrap();
+
+    assert_eq!(get_token_balance(&source_account), 500);
+    assert_eq!(get_token_balance(&dest_account), 500);
+}
+```
+
+<Tip>
+For more testing examples, see the [Testing Guide](/guides/testing) and the `program-tests/compressed-token-test` directory in the Light Protocol repository.
+</Tip>
+
+## Best Practices
+
+<Steps>
+
+### Pre-fund Compression Epochs
+
+Set `pre_pay_num_epochs` to at least 2 to avoid requiring top-ups during transactions:
+
+```rust
+let compressible_params = CompressibleParams {
+    pre_pay_num_epochs: 2, // Minimum recommended
+    // ... other params
+};
+```
+
+### Handle Extension States Correctly
+
+Always check account state before operations:
+
+```rust
+if token_account.state == AccountState::Frozen {
+    return Err(TokenError::AccountFrozen.into());
+}
+```
+
+### Use Type-Safe Deserialization
+
+Use borsh deserialization for type-safe account access:
+
+```rust
+let token = Token::deserialize(&mut &account.data[..])?;
+assert_eq!(token, expected_token);
+```
+
+### Test with Both V1 and V2 Trees
+
+Ensure compatibility with both tree versions:
+
+```rust
+#[tokio::test]
+async fn test_with_v1() {
+    let config = ProgramTestConfig::default(); // V1
+    // ... test code
+}
+
+#[tokio::test]
+async fn test_with_v2() {
+    let config = ProgramTestConfig::new_v2(true, None); // V2
+    // ... test code
+}
+```
+
+</Steps>
+
+## Common Patterns
+
+### Mint and Transfer Flow
+
+```rust Complete Example
+use light_token::instruction::*;
+use light_token_interface::state::TokenDataVersion;
+
+// 1. Create mint
+let mint = create_mint_22(&mut rpc, &payer, decimals).await;
+
+// 2. Create token account with compression
+let create_ix = CreateTokenAccount::new(
+    payer.pubkey(),
+    token_account.pubkey(),
+    mint.pubkey(),
+    owner.pubkey(),
+)
+.with_compressible(CompressibleParams {
+    compressible_config,
+    rent_sponsor,
+    pre_pay_num_epochs: 2,
+    lamports_per_write: Some(100),
+    compress_to_account_pubkey: None,
+    token_account_version: TokenDataVersion::ShaFlat,
+    compression_only: false,
+})
+.instruction()?;
+
+// 3. Mint tokens (standard SPL token mint)
+let mint_ix = mint_to(
+    &token_2022::ID,
+    &mint.pubkey(),
+    &token_account.pubkey(),
+    &mint_authority.pubkey(),
+    &[],
+    amount,
+)?;
+
+// 4. Transfer tokens
+let transfer_ix = build_transfer_instruction(
+    source,
+    destination,
+    amount,
+    authority.pubkey(),
+);
+```
+
+### Error Handling
+
+```rust Error Handling
+use light_token_interface::error::TokenError;
+
+match transfer_result {
+    Ok(_) => println!("Transfer successful"),
+    Err(e) => {
+        if let Some(token_error) = e.downcast_ref::<TokenError>() {
+            match token_error {
+                TokenError::InsufficientFunds => {
+                    println!("Insufficient balance");
+                },
+                TokenError::AccountFrozen => {
+                    println!("Account is frozen");
+                },
+                _ => println!("Other token error: {:?}", token_error),
+            }
+        }
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Compressed PDAs" icon="database" href="/guides/compressed-pdas">
+  Learn how to create compressed program-derived accounts
+</Card>
+
+<Card title="Testing Guide" icon="flask" href="/guides/testing">
+  Deep dive into testing strategies and tools
+</Card>
+
+<Card title="Token SDK Reference" icon="code" href="/sdk/compressed-token/overview">
+  Explore the complete Token SDK API
+</Card>
+
+<Card title="Example Programs" icon="github" href="https://github.com/Lightprotocol/light-protocol">
+  View complete example programs
+</Card>
+
+</CardGroup>
+
+## Resources
+
+- [Compressed Token Program Source](https://github.com/Lightprotocol/light-protocol/tree/main/programs/compressed-token)
+- [Token SDK Tests](https://github.com/Lightprotocol/light-protocol/tree/main/program-tests/compressed-token-test)
+- [SPL Token 2022 Extensions](https://spl.solana.com/token-2022/extensions)

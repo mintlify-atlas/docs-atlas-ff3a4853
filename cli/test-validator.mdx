@@ -1,0 +1,365 @@
+---
+title: 'Test Validator'
+description: 'Local development environment with validator, indexer, and prover'
+---
+
+# Test Validator
+
+The `light test-validator` command starts a complete local development environment for ZK Compression, including:
+
+- **Solana test validator** with Light Protocol programs
+- **Photon indexer** for querying compressed accounts
+- **Light prover server** for generating zero-knowledge proofs
+- **Forester service** (optional) for automatic tree management
+
+## Basic Usage
+
+```bash
+light test-validator
+```
+
+This starts all services with default configuration and a clean ledger.
+
+## Core Flags
+
+### Skip Services
+
+Run the validator without specific components:
+
+<ParamField path="--skip-indexer" type="boolean" default="false">
+  Skip starting the Photon indexer. Use when you have an external indexer or don't need compressed account queries.
+</ParamField>
+
+<ParamField path="--skip-prover" type="boolean" default="false">
+  Skip starting the prover service. Use when you have an external prover or want to test without proof generation.
+</ParamField>
+
+<ParamField path="--skip-system-accounts" type="boolean" default="false">
+  Skip initializing Light system accounts. Advanced usage only.
+</ParamField>
+
+```bash Example
+light test-validator --skip-indexer --skip-prover
+```
+
+### Forester Service
+
+<ParamField path="--forester" type="boolean" default="false">
+  Start the forester service for automatic compression of compressible accounts.
+</ParamField>
+
+<ParamField path="--forester-port" type="integer" default="8080">
+  Port for the forester API server.
+</ParamField>
+
+<ParamField path="--light-pda-program" type="string" multiple>
+  Light PDA programs to track. Format: `program_id:discriminator_base58`. Can be specified multiple times for tracking multiple programs.
+</ParamField>
+
+```bash Example
+light test-validator --forester --forester-port 9090 \
+  --light-pda-program "ProgramId1:Discriminator1" \
+  --light-pda-program "ProgramId2:Discriminator2"
+```
+
+## Network Configuration
+
+### Port Configuration
+
+<ParamField path="--rpc-port" type="integer" default="8899">
+  JSON RPC port. The RPC websocket will use the next port (default: 8900).
+</ParamField>
+
+<ParamField path="--indexer-port" type="integer" default="8784">
+  Photon indexer port. Cannot be used with `--skip-indexer`.
+</ParamField>
+
+<ParamField path="--prover-port" type="integer" default="3001">
+  Light prover server port. Cannot be used with `--skip-prover`.
+</ParamField>
+
+<ParamField path="--gossip-host" type="string" default="127.0.0.1">
+  Gossip DNS name or IP address for the validator to advertise.
+</ParamField>
+
+```bash Example
+light test-validator \
+  --rpc-port 9000 \
+  --indexer-port 9784 \
+  --prover-port 4001
+```
+
+### Validator Configuration
+
+<ParamField path="--limit-ledger-size" type="integer" default="10000">
+  Maximum number of shreds to keep in root slots. Higher values use more disk space.
+</ParamField>
+
+<ParamField path="--geyser-config" type="string">
+  Path to Geyser plugin configuration file. Cannot be used with `--validator-args`.
+</ParamField>
+
+<ParamField path="--validator-args" type="string">
+  Additional arguments to pass directly to `solana-test-validator`. For advanced users only. Cannot be used with `--geyser-config`.
+</ParamField>
+
+```bash Example
+light test-validator --limit-ledger-size 50000000
+```
+
+```bash Geyser Plugin
+light test-validator --geyser-config ./config.json
+```
+
+```bash Direct Validator Args
+light test-validator --validator-args "--limit-ledger-size 50000000"
+```
+
+## Program Management
+
+### Loading Custom Programs
+
+<ParamField path="--sbf-program" type="string" multiple>
+  Add a SBF program to genesis with upgrades disabled. Takes two arguments: `<address> <path/program.so>`. Can be specified multiple times.
+  
+  If the ledger exists, this parameter is silently ignored.
+</ParamField>
+
+<ParamField path="--upgradeable-program" type="string" multiple>
+  Add an upgradeable SBF program to genesis. Required for programs needing compressible config initialization. Takes three arguments: `<address> <path/program.so> <upgrade_authority>`. Can be specified multiple times.
+  
+  If the ledger exists, this parameter is silently ignored.
+</ParamField>
+
+```bash SBF Program
+light test-validator \
+  --sbf-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA token.so
+```
+
+```bash Upgradeable Program
+light test-validator \
+  --upgradeable-program MyProgram111111111111111111111111111 \
+    ./target/deploy/my_program.so \
+    UpgradeAuth11111111111111111111111111111
+```
+
+<Warning>
+Custom programs cannot use addresses or filenames that collide with Light Protocol system programs:
+- `noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV` (spl_noop.so)
+- `SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7` (light_system_program.so)
+- `cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m` (light_compressed_token.so)
+- `compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq` (account_compression.so)
+- `Lighton6oQpVkeewmo2mcPTQQp7kYHr4fWpAgJyEmDX` (light_registry.so)
+</Warning>
+
+### Loading Accounts
+
+<ParamField path="--account-dir" type="string" multiple>
+  Additional directory containing account JSON files to preload. Can be specified multiple times for multiple directories.
+</ParamField>
+
+```bash Example
+light test-validator \
+  --account-dir ./accounts/mainnet \
+  --account-dir ./accounts/custom
+```
+
+## Network Cloning
+
+<ParamField path="--devnet" type="boolean" default="false">
+  Clone Light Protocol programs and accounts from Devnet instead of loading local binaries. Cannot be used with `--mainnet`.
+</ParamField>
+
+<ParamField path="--mainnet" type="boolean" default="false">
+  Clone Light Protocol programs and accounts from Mainnet instead of loading local binaries. Cannot be used with `--devnet`.
+</ParamField>
+
+```bash Devnet Clone
+light test-validator --devnet
+```
+
+```bash Mainnet Clone
+light test-validator --mainnet
+```
+
+## Indexer Configuration
+
+<ParamField path="--indexer-db-url" type="string">
+  Custom indexer database URL for storing indexing data. By default, an in-memory SQLite database is used. Cannot be used with `--skip-indexer`.
+</ParamField>
+
+<ParamField path="--relax-indexer-version-constraint" type="boolean" default="false">
+  Disable indexer version check. Use only if you know what you're doing. Cannot be used with `--skip-indexer`.
+</ParamField>
+
+```bash Custom Database
+light test-validator --indexer-db-url "postgresql://user:pass@localhost/photon"
+```
+
+## Validator Management
+
+### Validator Runtime
+
+<ParamField path="--use-surfpool" type="boolean" default="true">
+  Use Surfpool instead of `solana-test-validator`. Pass `--no-use-surfpool` to use the standard Solana test validator.
+</ParamField>
+
+<ParamField path="--skip-reset" type="boolean" default="false">
+  Skip resetting the ledger. Continues from previous state.
+</ParamField>
+
+```bash Use Standard Validator
+light test-validator --no-use-surfpool
+```
+
+```bash Continue Previous Session
+light test-validator --skip-reset
+```
+
+### Stopping the Validator
+
+<ParamField path="--stop" type="boolean" default="false">
+  Stop the test validator and dependent processes. Combine with `--skip-indexer` or `--skip-prover` to keep specific services running.
+</ParamField>
+
+```bash Stop All
+light test-validator --stop
+```
+
+```bash Stop Validator, Keep Prover
+light test-validator --stop --skip-prover
+```
+
+## Logging
+
+<ParamField path="--verbose" type="boolean" default="false" char="v">
+  Enable verbose logging for debugging.
+</ParamField>
+
+```bash
+light test-validator -v
+```
+
+## Common Workflows
+
+### Standard Development Setup
+
+```bash
+# Full environment with clean state
+light test-validator
+```
+
+### Testing Without Indexer
+
+```bash
+# When you don't need compressed account queries
+light test-validator --skip-indexer
+```
+
+### Custom Ports for Multiple Instances
+
+```bash
+# Run multiple validators simultaneously
+light test-validator \
+  --rpc-port 9899 \
+  --indexer-port 9784 \
+  --prover-port 4001
+```
+
+### Production-Like Setup
+
+```bash
+# Clone mainnet state with forester
+light test-validator --mainnet --forester
+```
+
+### Testing Custom Programs
+
+```bash
+# Load your program with Light Protocol
+light test-validator \
+  --upgradeable-program MyProg111111111111111111111111111111 \
+    ./target/deploy/my_program.so \
+    $(solana address)
+```
+
+## Troubleshooting
+
+<Accordion title="Port already in use">
+  If you see port conflicts, either:
+  - Stop existing services with `light test-validator --stop`
+  - Use custom ports with `--rpc-port`, `--indexer-port`, `--prover-port`
+</Accordion>
+
+<Accordion title="Validator won't start">
+  Try these steps:
+  1. Stop all processes: `light test-validator --stop`
+  2. Check for zombie processes: `ps aux | grep solana`
+  3. Start with verbose logging: `light test-validator -v`
+  4. Reset the ledger: Start normally (resets by default)
+</Accordion>
+
+<Accordion title="Indexer version mismatch">
+  If you need to bypass version checks temporarily:
+  ```bash
+  light test-validator --relax-indexer-version-constraint
+  ```
+  
+  Note: This is not recommended for production use.
+</Accordion>
+
+<Accordion title="Custom program not loading">
+  Ensure:
+  - Program file exists at the specified path
+  - Address doesn't conflict with system programs
+  - Filename doesn't match system program names
+  - You're using the correct flag (--sbf-program vs --upgradeable-program)
+</Accordion>
+
+## Examples
+
+<CodeGroup>
+
+```bash Minimal Setup
+# Just validator and prover
+light test-validator --skip-indexer
+```
+
+```bash Full Development
+# Everything with custom ports and verbose logging
+light test-validator \
+  --forester \
+  --rpc-port 9000 \
+  --indexer-port 9784 \
+  --prover-port 4001 \
+  --verbose
+```
+
+```bash Mainnet Fork
+# Clone mainnet state for testing
+light test-validator --mainnet
+```
+
+```bash Custom Programs
+# Load multiple custom programs
+light test-validator \
+  --upgradeable-program Program1111111111111111111111111111111 \
+    ./programs/program1.so \
+    $(solana address) \
+  --upgradeable-program Program2222222222222222222222222222222 \
+    ./programs/program2.so \
+    $(solana address)
+```
+
+</CodeGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="All Commands" icon="terminal" href="/cli/commands">
+    Explore the complete command reference
+  </Card>
+  <Card title="Compressed Tokens" icon="coins" href="/guides/compressed-tokens">
+    Learn to work with compressed tokens
+  </Card>
+</CardGroup>

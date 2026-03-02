@@ -1,0 +1,249 @@
+---
+title: "Rust SDK Overview"
+description: "Build compressed Solana programs with the Light Protocol Rust SDK"
+---
+
+## Introduction
+
+The Light Protocol Rust SDK enables developers to build Solana programs that use ZK Compression for rent-free accounts. The SDK provides libraries for creating compressed accounts, managing state in Merkle trees, and integrating with Light Protocol's on-chain programs.
+
+## Core SDK Crates
+
+The Rust SDK consists of three main libraries:
+
+<CardGroup cols={3}>
+  <Card title="light-sdk" icon="cube" href="#light-sdk">
+    Core SDK for building compressed account programs
+  </Card>
+  <Card title="light-client" icon="network-wired" href="#light-client">
+    RPC client for querying compressed accounts
+  </Card>
+  <Card title="light-token" icon="coins" href="#light-token">
+    SDK for Light Token operations
+  </Card>
+</CardGroup>
+
+## light-sdk
+
+**Version:** 0.23.0  
+**Crate:** [`light-sdk`](https://crates.io/crates/light-sdk)
+
+The base library for using Compressed Accounts in Solana on-chain Rust and Anchor programs.
+
+### Key Features
+
+- **No rent exemption** - Compressed accounts don't require rent-exemption payments
+- **Constant proof size** - 128-byte validity proof per transaction for one or multiple compressed accounts
+- **Merkle tree state** - Account state stored as hashes in State Merkle trees
+- **Address management** - Unique addresses stored in Address Merkle trees
+- **Framework support** - Works with native Solana programs, Anchor, and Pinocchio
+
+### When to Use Compressed Accounts
+
+<Check>**Good for:**</Check>
+- User-owned accounts
+- Account data sent as instruction data
+- Applications where accounts are accessed individually
+
+<Warning>**Not suitable for:**</Warning>
+- Config accounts that are frequently read
+- Pool accounts requiring concurrent access
+- DeFi protocols needing parallel execution
+
+### Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+light-sdk = { version = "0.23.0", features = ["anchor", "v2"] }
+```
+
+### Available Features
+
+<ParamField path="anchor" type="feature">
+  Enables Anchor framework support with `AnchorSerialize`/`AnchorDeserialize` traits
+</ParamField>
+
+<ParamField path="v2" type="feature" default="true">
+  Support for optimized v2 light system program instructions (available on devnet/localnet)
+</ParamField>
+
+<ParamField path="cpi-context" type="feature">
+  Enables batched compressed account operations across multiple CPIs with one validity proof
+</ParamField>
+
+<ParamField path="poseidon" type="feature">
+  Use Poseidon hash function for state compression
+</ParamField>
+
+<ParamField path="keccak" type="feature">
+  Use Keccak hash function for state compression
+</ParamField>
+
+<ParamField path="sha256" type="feature">
+  Use SHA256 hash function for state compression
+</ParamField>
+
+## light-client
+
+**Version:** 0.23.0  
+**Crate:** [`light-client`](https://crates.io/crates/light-client)
+
+Rust client library for interacting with Light Protocol compressed accounts and RPC endpoints.
+
+### Key Features
+
+- Connect to local test validator, devnet, or mainnet
+- Query compressed accounts by owner, address, or hash
+- Get validity proofs for creating transactions
+- Support for both v1 and v2 merkle trees
+- Local test validator management
+
+### Installation
+
+```toml
+[dependencies]
+light-client = { version = "0.23.0", features = ["v2"] }
+tokio = { version = "1.48", features = ["rt", "macros"] }
+```
+
+### Quick Example
+
+```rust
+use light_client::{
+    rpc::{LightClient, LightClientConfig, Rpc},
+    indexer::Indexer,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to local validator
+    let mut rpc = LightClient::new(LightClientConfig::local()).await?;
+    
+    // Query compressed accounts
+    let accounts = rpc
+        .get_compressed_accounts_by_owner(&owner, None, None)
+        .await?;
+    
+    println!("Found {} accounts", accounts.value.items.len());
+    Ok(())
+}
+```
+
+## light-token
+
+**Version:** 0.23.0  
+**Crate:** [`light-token`](https://crates.io/crates/light-token)
+
+SDK for building programs that interact with Light Token Accounts and Light Mints.
+
+### Light Token Accounts
+
+- Functionally equivalent to SPL token accounts
+- Can hold tokens of Light, SPL, and Token 2022 mints
+- **Cost:** 17,288 lamports to create with 24 hours rent
+- **Rent-free:** Rent exemption sponsored by the token program (388 lamports per 1.5h epoch)
+- **Auto-compression:** Auto-compresses when lamport balance is insufficient
+- **State preservation:** Compressed state is cryptographically preserved on-chain
+
+### Installation
+
+```toml
+[dependencies]
+light-token = { version = "0.23.0", features = ["anchor"] }
+```
+
+### Common Operations
+
+| Operation | Instruction Builder | CPI Builder |
+|-----------|---------------------|-------------|
+| Create Associated Token Account | `CreateAssociatedTokenAccount` | `CreateAssociatedAccountCpi` |
+| Create Token Account | `CreateTokenAccount` | `CreateTokenAccountCpi` |
+| Transfer | `Transfer` | `TransferCpi` |
+| Transfer Interface | `TransferInterface` | `TransferInterfaceCpi` |
+| Create Mint | `CreateMint` | `CreateMintCpi` |
+| Mint To | `MintTo` | `MintToCpi` |
+| Burn | `Burn` | `BurnCpi` |
+| Close Account | `CloseAccount` | `CloseAccountCpi` |
+
+## Supporting Libraries
+
+### light-program-test
+
+**Version:** 0.23.0  
+**Purpose:** Fast local test environment using LiteSVM
+
+```toml
+[dev-dependencies]
+light-program-test = "0.23.0"
+```
+
+### light-sdk-macros
+
+**Version:** 0.23.0  
+**Purpose:** Procedural macros for Light Protocol development
+
+- `#[derive(LightDiscriminator)]` - Derive compressed account discriminator
+- `#[derive(LightHasher)]` - Derive account hasher
+- `derive_light_cpi_signer!()` - Generate CPI signer from program ID
+
+## Architecture Overview
+
+```text
+┌─ Client
+│  ├─ Get ValidityProof from RPC
+│  ├─ Pack accounts with PackedAccounts
+│  ├─ Pack CompressedAccountMeta
+│  ├─ Build Instruction
+│  └─ Send transaction
+│
+└─ Custom Program
+   ├─ CpiAccounts parse accounts
+   ├─ LightAccount instantiates from CompressedAccountMeta
+   │
+   └─ Light System Program CPI
+      ├─ Verify ValidityProof
+      ├─ Update State Merkle tree
+      ├─ Update Address Merkle tree
+      └─ Complete atomic state transition
+```
+
+## Version Compatibility
+
+<Note>
+All Light Protocol SDK crates are versioned together at **0.23.0**. Make sure to use matching versions across all dependencies.
+</Note>
+
+| SDK Version | Solana Version | Features |
+|-------------|----------------|----------|
+| 0.23.0 | 2.3 | V2 Merkle trees, CPI context |
+| 0.22.0 | 2.2 | V1 Merkle trees |
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Program Examples" icon="github" href="https://github.com/Lightprotocol/program-examples">
+    Full example programs using Light SDK
+  </Card>
+  <Card title="Light Token Examples" icon="github" href="https://github.com/Lightprotocol/examples-light-token">
+    Token-specific example programs
+  </Card>
+  <Card title="API Documentation" icon="book" href="https://docs.rs/light-sdk">
+    Complete API reference on docs.rs
+  </Card>
+  <Card title="Light CLI" icon="terminal" href="https://www.npmjs.com/package/@lightprotocol/zk-compression-cli">
+    Local test validator with Light Protocol
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SDK Libraries Reference" icon="books" href="/sdk/rust/sdk-libs">
+    Detailed documentation for each SDK crate
+  </Card>
+  <Card title="Program Integration" icon="code" href="/sdk/rust/program-integration">
+    Integrate Light SDK into your Solana program
+  </Card>
+</CardGroup>

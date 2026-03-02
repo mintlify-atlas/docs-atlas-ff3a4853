@@ -1,0 +1,220 @@
+---
+title: "ZK Compression"
+description: "Understanding ZK Compression technology in Light Protocol"
+---
+
+## What is ZK Compression?
+
+ZK Compression is a primitive that enables Solana developers to reduce on-chain state costs by orders of magnitude while preserving the Solana L1's security, performance, and composability. Instead of storing data directly in expensive on-chain account space, ZK Compression stores data as hashes in Merkle trees, with the full data available off-chain.
+
+<Info>
+ZK Compression reduces state costs to near zero, enabling applications to scale to millions of users without prohibitive storage fees.
+</Info>
+
+## How It Works
+
+When a Solana account gets compressed:
+
+1. **Data Hashing**: The account data is hashed using the Poseidon hash function
+2. **Merkle Tree Storage**: The hash is stored as a leaf in a sparse binary Merkle tree
+3. **On-chain Root**: Only the tree's root hash (a small fingerprint) is stored on-chain
+4. **Off-chain Data**: The full account data is stored off-chain in Solana's cheaper ledger space
+
+### State Transitions
+
+A compressed state transition can be expressed as:
+
+```
+(state, validityProof) → state transition → state'
+```
+
+Where `state'` gets emitted onto the ledger.
+
+## Zero-Knowledge Proofs
+
+To read or write compressed state, transactions must provide:
+
+- **Compressed account data**: The off-chain state being accessed
+- **Merkle proof**: Cryptographic proof of the data's position in the tree
+- **Validity proof**: A succinct zero-knowledge proof (Groth16 SNARK) verifying state integrity
+
+The validity proof is only **128 bytes**, making it ideal for Solana's 1232-byte transaction size limit. This constant proof size means you can verify the integrity of many compressed accounts with the same computational overhead.
+
+<Note>
+Light Protocol uses Groth16 SNARKs for their succinctness - a constant 128-byte proof can verify the integrity of thousands of compressed accounts.
+</Note>
+
+## Key Properties
+
+### Security
+
+- Inherits Solana L1 security guarantees
+- Zero-knowledge proofs cryptographically verify state integrity
+- On-chain roots prevent state tampering
+- All state transitions are atomic and instantly final
+
+### Performance
+
+- State transitions are atomic and instantly final
+- No additional confirmation time compared to regular Solana transactions
+- Parallelizable - multiple independent trees can be updated simultaneously
+
+### Composability
+
+- Fully composable with existing Solana programs
+- Compressed accounts can interact with regular Solana accounts in the same transaction
+- Standard Solana development workflow - use Anchor, Rust, and familiar tools
+
+## Compression vs Regular Accounts
+
+| Property | Regular Account | Compressed Account |
+|----------|----------------|--------------------|
+| **Storage Location** | On-chain account space | Off-chain (ledger space) |
+| **State Root** | N/A | On-chain in Merkle tree |
+| **Cost** | ~0.00203 SOL per KB | Near zero |
+| **Verification** | Account owner | ZK proof + Merkle root |
+| **Finality** | Instant | Instant |
+| **Composability** | Full | Full |
+
+## Cost Savings
+
+The cost reduction is dramatic:
+
+- **Regular Solana account**: ~0.00203 SOL per KB (~$0.20 at $100/SOL)
+- **Compressed account**: Near zero storage cost
+- **Example**: Storing 1 million token accounts
+  - Regular: ~2,030 SOL (~$203,000)
+  - Compressed: ~5 SOL (~$500) for Merkle tree overhead
+
+<Accordion title="Cost Breakdown Example">
+For a token program serving 1 million users:
+
+**Regular SPL Tokens:**
+- Account size: ~165 bytes per token account
+- Rent per account: ~0.00203 SOL
+- Total: 2,030 SOL (~$203,000 at $100/SOL)
+
+**Compressed Tokens:**
+- Merkle tree rent: ~0.5 SOL per tree
+- Trees needed: ~10 (100k accounts each)
+- Total: ~5 SOL (~$500)
+
+**Savings: 99.75%**
+</Accordion>
+
+## Use Cases
+
+ZK Compression is ideal for:
+
+### Token Distribution
+- Airdrops to millions of users
+- Loyalty points and rewards programs
+- Gaming tokens and in-game currencies
+
+### Digital Assets
+- NFT collections with large supply
+- Dynamic metadata updates
+- Compressed PDA accounts for user profiles
+
+### Social Applications
+- User profiles and social graphs
+- Posts, comments, and interactions
+- Reputation and credential systems
+
+### DeFi Applications
+- Payments infrastructure
+- Micro-transactions
+- Order books with millions of orders
+
+## State Storage Lifecycle
+
+1. **Creation**: Compressed account hash is inserted into a Merkle tree queue
+2. **Batching**: Multiple insertions are batched together for efficiency
+3. **Proof Generation**: Off-chain prover generates ZK proof for the batch
+4. **Tree Update**: Forester submits proof to update the on-chain Merkle tree root
+5. **Reading**: Client fetches compressed data from indexer, proves inclusion with ZK proof
+6. **Updating**: Old hash is nullified, new hash is inserted (creates new leaf)
+
+## Limitations and Trade-offs
+
+<Note>
+While ZK Compression dramatically reduces costs, it has trade-offs to consider:
+</Note>
+
+### Larger Transaction Size
+
+- Transactions must include compressed state data and 128-byte validity proof
+- May require multiple transactions for complex state transitions
+- Can hit 1232-byte transaction limit faster than regular accounts
+
+### Higher Compute Units
+
+- ZK verification and Poseidon hashing increase base CU cost
+- Typical compressed transaction: 200k-400k CU
+- Regular transaction: 5k-50k CU
+- Full blocks may impact transaction inclusion rates
+
+### Forester Dependency
+
+- Requires Forester nodes to empty nullifier queues and update trees
+- Forester liveness is critical for protocol operation
+- Additional infrastructure and operating costs
+- Recovery from liveness failures is possible but adds complexity
+
+### Development Complexity
+
+- Requires understanding of Merkle trees and ZK proofs
+- More complex error handling (proof failures, queue limits)
+- Indexer infrastructure needed for off-chain data retrieval
+
+## Technical Implementation
+
+```rust
+// Example: Compressed account hash structure
+pub struct CompressedAccount {
+    pub owner: Pubkey,           // Program that owns this account
+    pub lamports: u64,            // Account balance
+    pub address: Option<[u8; 32]>, // Optional unique address (PDA)
+    pub data: Option<CompressedAccountData>, // Account data
+}
+
+pub struct CompressedAccountData {
+    pub discriminator: [u8; 8],  // Account type identifier
+    pub data: Vec<u8>,           // Raw account data
+    pub data_hash: [u8; 32],     // Hash of the data
+}
+```
+
+The compressed account hash is computed as:
+
+```
+H(owner || leaf_index || merkle_tree_pubkey || lamports || address || discriminator || data_hash)
+```
+
+Where:
+- `owner`: Hashed and truncated to 31 bytes (BN254 field size)
+- `leaf_index`: Position in Merkle tree (4 bytes)
+- `merkle_tree_pubkey`: Hashed and truncated to 31 bytes
+- `lamports`: Account balance (8 bytes, domain-separated with prefix 1)
+- `address`: Optional 32-byte address
+- `discriminator`: 8-byte account type (domain-separated with prefix 2)
+- `data_hash`: 32-byte hash of account data
+
+All hashes use the Poseidon hash function, which is ZK-friendly and efficient for verification in circuits.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Learn about Light Protocol's system architecture
+  </Card>
+  <Card title="Compressed Accounts" icon="folder-tree" href="/concepts/compressed-accounts">
+    Deep dive into the compressed account model
+  </Card>
+  <Card title="Merkle Trees" icon="tree" href="/concepts/merkle-trees">
+    Understand Merkle tree data structures
+  </Card>
+  <Card title="State Trees" icon="database" href="/concepts/state-trees">
+    Explore state tree management
+  </Card>
+</CardGroup>

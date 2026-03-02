@@ -1,0 +1,493 @@
+---
+title: "Working with Compressed Accounts"
+description: "Learn how to create, query, and manage compressed accounts"
+---
+
+## Overview
+
+Compressed accounts store state in Merkle trees instead of traditional Solana accounts, eliminating rent costs while maintaining full composability and security through zero-knowledge proofs.
+
+## Compressed Account Structure
+
+A compressed account contains:
+
+```typescript
+interface CompressedAccountWithMerkleContext {
+  hash: BN254;              // Account hash (unique identifier)
+  treeInfo: TreeInfo;       // Merkle tree location
+  leafIndex: number;        // Position in tree
+  owner: PublicKey;         // Account owner
+  lamports: BN;             // SOL balance
+  address: Uint8Array | null;  // Optional: account address
+  data: CompressedAccountData | null;  // Optional: account data
+}
+```
+
+### Account Data
+
+Compressed accounts can store arbitrary data:
+
+```typescript
+interface CompressedAccountData {
+  discriminator: number[];  // 8-byte program discriminator
+  data: Buffer;            // Serialized account data
+  dataHash: number[];      // Hash of the data (32 bytes)
+}
+```
+
+## Querying Compressed Accounts
+
+### By Owner
+
+Fetch all compressed accounts owned by a public key:
+
+```typescript
+import { createRpc } from '@lightprotocol/stateless.js';
+import { PublicKey } from '@solana/web3.js';
+
+const rpc = createRpc();
+const owner = new PublicKey('...');
+
+// Get all accounts
+const response = await rpc.getCompressedAccountsByOwner(owner);
+
+console.log('Found accounts:', response.items.length);
+response.items.forEach(account => {
+  console.log('Account:', {
+    hash: account.hash.toString(),
+    lamports: account.lamports.toString(),
+    leafIndex: account.leafIndex,
+  });
+});
+```
+
+### With Pagination
+
+Handle large result sets with cursor-based pagination:
+
+```typescript
+import { bn } from '@lightprotocol/stateless.js';
+
+let cursor: string | undefined;
+const allAccounts = [];
+
+do {
+  const response = await rpc.getCompressedAccountsByOwner(owner, {
+    cursor,
+    limit: bn(1000),
+  });
+  
+  allAccounts.push(...response.items);
+  cursor = response.cursor ?? undefined;
+} while (cursor);
+
+console.log('Total accounts:', allAccounts.length);
+```
+
+### By Hash
+
+Fetch a specific account by its hash:
+
+```typescript
+import { bn } from '@lightprotocol/stateless.js';
+
+const accountHash = bn('1234567890...');
+
+const account = await rpc.getCompressedAccount(
+  undefined,  // address
+  accountHash // hash
+);
+
+if (account) {
+  console.log('Found account:', {
+    owner: account.owner.toBase58(),
+    lamports: account.lamports.toString(),
+    hasData: account.data !== null,
+  });
+}
+```
+
+### By Address
+
+Query by account address (if the account has one):
+
+```typescript
+const address = new Uint8Array([/* 32 bytes */]);
+
+const account = await rpc.getCompressedAccount(
+  address,    // address
+  undefined   // hash
+);
+```
+
+### Multiple Accounts
+
+Batch fetch multiple accounts:
+
+```typescript
+const hashes = [
+  bn('hash1...'),
+  bn('hash2...'),
+  bn('hash3...'),
+];
+
+const accounts = await rpc.getMultipleCompressedAccounts(hashes);
+
+accounts.forEach((account, i) => {
+  console.log(`Account ${i}:`, account.lamports.toString());
+});
+```
+
+## Creating Compressed Accounts
+
+### Compress SOL
+
+Create a compressed account by compressing regular SOL:
+
+```typescript
+import { compress } from '@lightprotocol/stateless.js';
+import { Keypair } from '@solana/web3.js';
+
+const payer = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Compress 0.01 SOL into a compressed account
+const signature = await compress(
+  rpc,
+  payer,           // Fee payer
+  10_000_000,      // 0.01 SOL in lamports
+  recipient        // Owner of compressed account
+);
+
+// Query the new account
+const accounts = await rpc.getCompressedAccountsByOwner(recipient);
+console.log('New account lamports:', accounts.items[0].lamports.toString());
+```
+
+### With Custom State Tree
+
+Specify which state tree to use:
+
+```typescript
+import { selectStateTreeInfo } from '@lightprotocol/stateless.js';
+
+// Get available trees
+const treeInfos = await rpc.getStateTreeInfos();
+const selectedTree = selectStateTreeInfo(treeInfos);
+
+// Compress to specific tree
+await compress(
+  rpc,
+  payer,
+  10_000_000,
+  recipient,
+  selectedTree  // Optional: specify output tree
+);
+```
+
+### Create Account with Address (V1 Only)
+
+<Warning>
+This method is only available in V1 and is deprecated. Use program-specific account creation methods instead.
+</Warning>
+
+```typescript
+import { createAccount, LightSystemProgram } from '@lightprotocol/stateless.js';
+
+const address = new Uint8Array([/* 32 bytes */]);
+
+await createAccount(
+  rpc,
+  payer,
+  [address],                      // Array of addresses to create
+  LightSystemProgram.programId,  // Owner program
+  undefined,                      // No data
+  stateTree                       // Output state tree
+);
+```
+
+## Transferring Compressed Accounts
+
+### Basic Transfer
+
+Transfer compressed SOL from one owner to another:
+
+```typescript
+import { transfer } from '@lightprotocol/stateless.js';
+
+const owner = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Transfer 0.001 SOL
+const signature = await transfer(
+  rpc,
+  payer,      // Fee payer
+  1_000_000,  // Amount in lamports
+  owner,      // Current owner (signer)
+  recipient   // Destination
+);
+```
+
+### How Transfers Work
+
+1. **Input Selection**: SDK automatically selects compressed accounts to cover the amount
+2. **Proof Generation**: Requests validity proof from the RPC
+3. **Account Creation**: Creates output accounts (recipient + change)
+4. **Nullification**: Marks input accounts as spent
+
+```typescript
+// The SDK does this automatically:
+const accounts = await rpc.getCompressedAccountsByOwner(owner.publicKey);
+
+// Select minimum accounts needed
+const [inputAccounts] = selectMinCompressedSolAccountsForTransfer(
+  accounts.items,
+  amount
+);
+
+// Get validity proof
+const proof = await rpc.getValidityProof(
+  inputAccounts.map(acc => bn(acc.hash))
+);
+
+// Build instruction
+const ix = await LightSystemProgram.transfer({
+  payer: payer.publicKey,
+  inputCompressedAccounts: inputAccounts,
+  toAddress: recipient,
+  lamports: amount,
+  recentInputStateRootIndices: proof.rootIndices,
+  recentValidityProof: proof.compressedProof,
+});
+```
+
+## Decompressing Accounts
+
+### Back to Regular SOL
+
+Convert compressed SOL back to regular Solana accounts:
+
+```typescript
+import { decompress } from '@lightprotocol/stateless.js';
+
+const owner = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Decompress 0.001 SOL to recipient's regular account
+const signature = await decompress(
+  rpc,
+  payer,      // Fee payer
+  1_000_000,  // Amount to decompress
+  recipient   // Destination (regular Solana account)
+);
+
+// Check regular balance
+const balance = await rpc.getBalance(recipient);
+console.log('Decompressed balance:', balance);
+```
+
+## Querying Balances
+
+### Total Balance by Owner
+
+Get total compressed SOL balance:
+
+```typescript
+const balance = await rpc.getCompressedBalanceByOwner(owner.publicKey);
+console.log('Total compressed SOL:', balance.toString(), 'lamports');
+```
+
+### Single Account Balance
+
+Get balance of a specific compressed account:
+
+```typescript
+const balance = await rpc.getCompressedBalance(
+  undefined,  // address
+  accountHash // hash
+);
+
+console.log('Account balance:', balance.toString(), 'lamports');
+```
+
+## Merkle Proofs
+
+### Get Account Proof
+
+Fetch the Merkle proof for an account:
+
+```typescript
+const proof = await rpc.getCompressedAccountProof(accountHash);
+
+console.log('Proof:', {
+  hash: proof.hash.toString(),
+  leafIndex: proof.leafIndex,
+  root: proof.root.toString(),
+  merkleProof: proof.merkleProof.map(p => p.toString()),
+});
+```
+
+### Batch Proof Requests
+
+Get proofs for multiple accounts:
+
+```typescript
+const hashes = [
+  bn('hash1...'),
+  bn('hash2...'),
+  bn('hash3...'),
+];
+
+const proofs = await rpc.getMultipleCompressedAccountProofs(hashes);
+
+proofs.forEach((proof, i) => {
+  console.log(`Proof ${i} root:`, proof.root.toString());
+});
+```
+
+## Account Filtering
+
+### With Filters
+
+Filter accounts by data pattern:
+
+```typescript
+const response = await rpc.getCompressedAccountsByOwner(owner, {
+  filters: [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: 'base58string...',
+      },
+    },
+  ],
+});
+```
+
+### With Data Slice
+
+Limit the data returned:
+
+```typescript
+const response = await rpc.getCompressedAccountsByOwner(owner, {
+  dataSlice: {
+    offset: 0,
+    length: 32,  // Only return first 32 bytes
+  },
+});
+```
+
+## Transaction Signatures
+
+### Get Signatures for Account
+
+Find all transactions involving a compressed account:
+
+```typescript
+const signatures = await rpc.getCompressionSignaturesForAccount(
+  accountHash
+);
+
+signatures.forEach(sig => {
+  console.log('Transaction:', {
+    signature: sig.signature,
+    slot: sig.slot,
+    blockTime: new Date(sig.blockTime * 1000),
+  });
+});
+```
+
+### Get Signatures by Owner
+
+Find all compression transactions for an owner:
+
+```typescript
+const signatures = await rpc.getCompressionSignaturesForOwner(
+  owner.publicKey,
+  {
+    cursor: undefined,
+    limit: bn(100),
+  }
+);
+
+console.log('Found', signatures.items.length, 'transactions');
+```
+
+## Best Practices
+
+### Account Selection
+
+When selecting accounts for transfers:
+
+```typescript
+import { selectMinCompressedSolAccountsForTransfer } from '@lightprotocol/stateless.js';
+
+const accounts = await rpc.getCompressedAccountsByOwner(owner.publicKey);
+
+// Select minimum accounts to cover the amount
+const [selectedAccounts, totalAmount] = 
+  selectMinCompressedSolAccountsForTransfer(
+    accounts.items,
+    requiredAmount
+  );
+
+if (totalAmount.lt(requiredAmount)) {
+  throw new Error('Insufficient balance');
+}
+```
+
+### Error Handling
+
+Handle common errors:
+
+```typescript
+try {
+  const account = await rpc.getCompressedAccount(undefined, hash);
+  
+  if (!account) {
+    console.log('Account not found or already spent');
+  }
+} catch (error) {
+  if (error.message.includes('failed to get info')) {
+    console.error('RPC error:', error);
+  } else {
+    throw error;
+  }
+}
+```
+
+### Transaction Confirmation
+
+Wait for transaction confirmation:
+
+```typescript
+import type { ConfirmOptions } from '@solana/web3.js';
+
+const confirmOptions: ConfirmOptions = {
+  commitment: 'confirmed',
+  skipPreflight: false,
+};
+
+const signature = await transfer(
+  rpc,
+  payer,
+  amount,
+  owner,
+  recipient,
+  confirmOptions
+);
+
+// Wait for finalization
+await rpc.confirmTransaction(signature, 'finalized');
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RPC Methods" icon="code" href="/sdk/stateless-js/rpc-methods">
+    Complete RPC method reference
+  </Card>
+  <Card title="Compressed Tokens" icon="coins" href="/sdk/compressed-token/overview">
+    Work with compressed SPL tokens
+  </Card>
+</CardGroup>

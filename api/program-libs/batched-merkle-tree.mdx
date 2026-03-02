@@ -1,0 +1,486 @@
+---
+title: "batched-merkle-tree"
+description: "Batched Merkle trees with ZK proof verification for efficient state compression"
+icon: "binary-tree"
+---
+
+## Overview
+
+The `light-batched-merkle-tree` crate provides batched Merkle tree implementations for the account compression program. Instead of updating trees one leaf at a time, this library batches multiple insertions and updates them with zero-knowledge proofs (ZKPs), enabling efficient on-chain verification.
+
+**Crate:** `light-batched-merkle-tree`  
+**Location:** `program-libs/batched-merkle-tree/`  
+**Error Codes:** 14301-14312
+
+## Key Concepts
+
+<CardGroup cols={2}>
+  <Card title="Batched Updates" icon="layer-group">
+    Group multiple tree operations and verify with a single ZK proof
+  </Card>
+  <Card title="Root History" icon="clock-rotate-left">
+    Maintain cyclic buffer of 200 roots for validity proofs
+  </Card>
+  <Card title="Bloom Filters" icon="filter">
+    Enable non-inclusion proofs while batches are filling
+  </Card>
+  <Card title="Immediate Spending" icon="bolt">
+    Access newly created accounts before tree insertion
+  </Card>
+</CardGroup>
+
+## Tree Types
+
+### State Trees (2 accounts)
+
+**Purpose:** Store compressed account hashes (state compression)
+
+**Accounts:**
+1. `BatchedMerkleTreeAccount` - Main tree with integrated input queue (nullifiers)
+2. `BatchedQueueAccount` - Output queue for new compressed accounts
+
+```rust
+pub struct BatchedMerkleTreeAccount {
+    pub metadata: BatchedMerkleTreeMetadata,
+    pub roots: [Root; ROOT_HISTORY_SIZE],  // Cyclic buffer
+    pub queue: IntegratedQueue,            // Nullifier queue
+}
+
+pub struct BatchedQueueAccount {
+    pub metadata: QueueMetadata,
+    pub batches: [Batch; 2],               // Alternating batches
+    pub value_vecs: [Vec<Hash>; 2],        // Actual values
+}
+```
+
+### Address Trees (1 account)
+
+**Purpose:** Register new addresses for compressed accounts
+
+**Account:**
+- `BatchedMerkleTreeAccount` with integrated queue (addresses only)
+- No separate output queue needed
+
+## Account Types
+
+### BatchedMerkleTreeAccount
+
+<ResponseField name="discriminator" type="[u8; 8]">
+  Account type identifier: `[111, 35, 172, 196, 215, 118, 11, 198]`
+</ResponseField>
+
+<ResponseField name="metadata" type="BatchedMerkleTreeMetadata">
+  Tree configuration and state:
+  - `tree_type`: StateV2 or AddressV2
+  - `height`: Merkle tree height (26-40)
+  - `next_index`: Next available leaf index
+  - `num_batches`: Number of batches (always 2)
+  - `batch_size`: Leaves per batch (10-500)
+  - `zkp_batch_size`: Leaves per ZK proof (10 or 500)
+  - `rollover_threshold`: Tree capacity threshold (default: 95%)
+  - `root_history_capacity`: Number of roots stored (200)
+  - `network_fee`: Optional fee for insertions
+</ResponseField>
+
+<ResponseField name="roots" type="[[u8; 32]; 200]">
+  Cyclic buffer of recent Merkle roots for validity proofs
+</ResponseField>
+
+<ResponseField name="queue" type="IntegratedQueue">
+  Input queue with bloom filters for nullifiers (state) or addresses (address trees)
+</ResponseField>
+
+### BatchedQueueAccount
+
+<ResponseField name="discriminator" type="[u8; 8]">
+  Account type identifier: `[119, 102, 42, 168, 46, 208, 215, 195]`
+</ResponseField>
+
+<ResponseField name="metadata" type="QueueMetadata">
+  Queue configuration and batch state
+</ResponseField>
+
+<ResponseField name="batches" type="[Batch; 2]">
+  Two alternating batches:
+  - **Fill** - Currently accepting insertions
+  - **Full** - Ready for ZKP updates
+  - **Inserted** - All values inserted into tree
+</ResponseField>
+
+<ResponseField name="value_vecs" type="[Vec<[u8; 32]>; 2]">
+  Actual leaf values for each batch. Values accessible by index even before tree insertion (enables immediate spending).
+</ResponseField>
+
+## Batching System
+
+### Alternating Batches
+
+Trees use 2 alternating batches for continuous operation:
+
+```
+Batch 0: [Fill] <- Currently accepting inserts
+Batch 1: [Full] <- Ready for ZKP update
+
+   ↓ After ZKP update
+
+Batch 0: [Full] <- Ready for ZKP update  
+Batch 1: [Inserted] <- Clearing for reuse
+
+   ↓ After batch is 50% full
+
+Batch 0: [Fill] <- Accepting inserts again
+Batch 1: [Fill] <- Now accepting inserts
+```
+
+### ZKP Batches
+
+Each batch is divided into smaller ZKP batches:
+
+- **batch_size:** Total capacity (e.g., 500 leaves)
+- **zkp_batch_size:** Leaves per proof (e.g., 10)
+- **num_zkp_batches:** batch_size / zkp_batch_size (e.g., 50)
+
+Trees are updated incrementally, one ZKP batch at a time.
+
+### Hash Chains
+
+Each ZKP batch has a hash chain - a Poseidon hash of all values in that batch:
+
+```rust
+// Hash chain for ZKP batch
+let hash_chain = Poseidon::hashv(&[
+    &value_0,
+    &value_1,
+    // ... all values in this ZKP batch
+]);
+```
+
+Used as public input for ZK proof verification.
+
+## Operations
+
+### Initialization
+
+<Accordion title="initialize_state_tree">
+  Create state tree + output queue pair.
+  
+  ```rust
+  pub fn initialize_state_tree(
+      tree_account: &mut BatchedMerkleTreeAccount,
+      queue_account: &mut BatchedQueueAccount,
+      params: InitStateTreeAccountsInstructionData,
+  ) -> Result<()>
+  ```
+  
+  **Parameters:**
+  - `height`: Tree height (26, 30, 32, 40)
+  - `batch_size`: 10, 100, 500, 1000
+  - `zkp_batch_size`: 10 or 500
+  - `bloom_filter_capacity`: Nullifier bloom filter size
+  
+  **Creates:** 2 Solana accounts
+</Accordion>
+
+<Accordion title="initialize_address_tree">
+  Create address tree with integrated queue.
+  
+  ```rust
+  pub fn initialize_address_tree(
+      tree_account: &mut BatchedMerkleTreeAccount,
+      params: InitAddressTreeAccountsInstructionData,
+  ) -> Result<()>
+  ```
+  
+  **Parameters:**
+  - `height`: Tree height (26, 30, 32, 40)
+  - `batch_size`: 10, 100, 250, 500
+  - `zkp_batch_size`: 10 or 250  
+  - `bloom_filter_capacity`: Address bloom filter size
+  
+  **Creates:** 1 Solana account
+  
+  **Initial state:** Tree has single leaf `H(0, HIGHEST_ADDRESS_PLUS_ONE)`
+</Accordion>
+
+### Queue Insertions
+
+<Accordion title="insert_into_output_queue">
+  Insert compressed account hash into output queue (state trees).
+  
+  ```rust
+  impl BatchedQueueAccount {
+      pub fn insert_into_current_batch(
+          &mut self,
+          value: [u8; 32],
+      ) -> Result<u64>
+  }
+  ```
+  
+  **Returns:** Leaf index for proof-by-index
+  
+  **Use case:** Called by system program when creating compressed accounts
+</Accordion>
+
+<Accordion title="insert_nullifier_into_queue">
+  Insert nullifier into input queue (state trees).
+  
+  ```rust
+  impl BatchedMerkleTreeAccount {
+      pub fn insert_nullifier_into_queue(
+          &mut self,
+          nullifier: [u8; 32],
+      ) -> Result<()>
+  }
+  ```
+  
+  **Side effects:** Updates bloom filter for non-inclusion checks
+  
+  **Use case:** Called by system program when spending compressed accounts
+</Accordion>
+
+<Accordion title="insert_address_into_queue">
+  Insert address into address queue.
+  
+  ```rust
+  impl BatchedMerkleTreeAccount {
+      pub fn insert_address_into_queue(
+          &mut self,
+          address: [u8; 32],
+      ) -> Result<()>
+  }
+  ```
+  
+  **Side effects:** Updates bloom filter for uniqueness checks
+  
+  **Use case:** Called by system program when creating new addresses
+</Accordion>
+
+### Tree Updates
+
+<Accordion title="update_tree_from_output_queue">
+  Batch append with ZKP verification (state trees).
+  
+  ```rust
+  impl BatchedMerkleTreeAccount {
+      pub fn update_tree_from_output_queue_account(
+          &mut self,
+          queue: &mut BatchedQueueAccount,
+          zkp_batch_index: u64,
+          proof: &CompressedProof,
+      ) -> Result<()>
+  }
+  ```
+  
+  **ZK Proof public inputs:**
+  - `old_root`: Root before update
+  - `new_root`: Root after update  
+  - `hash_chain`: Commitment to batch values
+  - `start_index`: First leaf index in this ZKP batch
+  
+  **Called by:** Forester service (off-chain)
+</Accordion>
+
+<Accordion title="update_tree_from_input_queue">
+  Batch nullify/address updates with ZKP.
+  
+  ```rust
+  pub fn update_tree_from_input_queue(
+      tree: &mut BatchedMerkleTreeAccount,
+      zkp_batch_index: u64,
+      proof: &CompressedProof,
+  ) -> Result<()>
+  ```
+  
+  **ZK Proof public inputs:**
+  - `old_root`: Root before update
+  - `new_root`: Root after update
+  - `hash_chain`: Commitment to batch values
+  - For address trees: `next_index`: Next available leaf index
+  
+  **Called by:** Forester service (off-chain)
+</Accordion>
+
+## Bloom Filters
+
+### Purpose
+
+Bloom filters enable non-inclusion proofs while batches are filling:
+
+- **State trees:** Check nullifier hasn't been used
+- **Address trees:** Check address hasn't been registered
+
+### Lifecycle
+
+```
+1. Batch starts filling
+   → Bloom filter active
+   → Values inserted into filter
+
+2. Batch marked Full
+   → Bloom filter still active
+   → Check against this batch
+
+3. All values inserted into tree
+   → Batch marked Inserted
+
+4. Next batch 50% full
+   → Bloom filter zeroed
+   → Can reuse this batch
+```
+
+### False Positives
+
+Bloom filters can have false positives (claim value exists when it doesn't). This is why they must be zeroed after the next batch is 50% full - by then, all values have been fully inserted into the tree.
+
+## Root History
+
+Trees maintain a cyclic buffer of 200 recent roots:
+
+```rust
+pub struct BatchedMerkleTreeAccount {
+    pub roots: [[u8; 32]; 200],
+    // ...
+}
+```
+
+**Purpose:** Enable validity proofs for recently spent compressed accounts even as the tree continues to update.
+
+**Indexing:** `root_index = num_insertions % 200`
+
+## Rollover
+
+### When to Rollover
+
+When a tree reaches the rollover threshold (default: 95% full):
+
+```rust
+if tree.next_index >= (capacity * rollover_threshold / 100) {
+    // Time to create new tree
+}
+```
+
+### Rollover Process
+
+<Steps>
+  <Step title="Create New Tree">
+    Initialize new tree with same configuration
+  </Step>
+  <Step title="Mark Old Tree">
+    Set `rolled_over` flag on old tree
+  </Step>
+  <Step title="Preserve Roots">
+    Old tree's root history remains available for ongoing validity proofs
+  </Step>
+  <Step title="Update References">
+    Clients update to use new tree address
+  </Step>
+</Steps>
+
+## Error Codes
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 14301 | `BatchNotReady` | Batch not ready for insertion |
+| 14302 | `BatchAlreadyInserted` | Batch already inserted into tree |
+| 14303 | `InvalidBatchIndex` | Invalid batch index (must be 0 or 1) |
+| 14304 | `InvalidZkpBatchIndex` | ZKP batch index out of range |
+| 14305 | `QueueFull` | Queue at capacity, cannot insert |
+| 14306 | `InvalidProof` | ZK proof verification failed |
+| 14307 | `InvalidRootIndex` | Root index not in history |
+| 14308 | `InvalidTreeHeight` | Unsupported tree height |
+| 14309 | `InvalidBatchSize` | Invalid batch size configuration |
+| 14310 | `TreeIsFull` | Tree reached capacity |
+| 14311 | `NonInclusionCheckFailed` | Value exists in bloom filter |
+| 14312 | `BloomFilterNotZeroed` | Bloom filter must be zeroed before reuse |
+
+## Usage Examples
+
+### Query Tree State
+
+```rust
+use light_batched_merkle_tree::merkle_tree::BatchedMerkleTreeAccount;
+
+let tree = BatchedMerkleTreeAccount::from_account_info(account)?;
+
+println!("Current root: {:?}", tree.get_current_root());
+println!("Next index: {}", tree.metadata.next_index);
+println!("Capacity: {}", tree.capacity());
+println!("Tree type: {:?}", tree.metadata.tree_type);
+```
+
+### Check Non-Inclusion
+
+```rust
+// Check if nullifier already used (state tree)
+let exists = tree.check_nullifier_exists(nullifier)?;
+if exists {
+    return Err(Error::NullifierAlreadyUsed);
+}
+
+// Check if address already registered (address tree)
+let exists = tree.check_address_exists(address)?;
+if exists {
+    return Err(Error::AddressAlreadyRegistered);
+}
+```
+
+### Insert Values
+
+```rust
+// Insert into output queue (state tree)
+let leaf_index = queue.insert_into_current_batch(account_hash)?;
+
+// Insert nullifier (state tree input queue)
+tree.insert_nullifier_into_queue(nullifier)?;
+
+// Insert address (address tree)
+tree.insert_address_into_queue(address)?;
+```
+
+## ZKP Verification
+
+Batch updates require zero-knowledge proofs generated by the Light Protocol prover:
+
+**Prover Server:** `prover/server/` - Go implementation using Gnark  
+**Circuits:** `prover/server/prover/v2/` - Batch append, update, address circuits
+
+**Supported batch sizes:**
+- State trees: 10, 500 leaves per ZKP
+- Address trees: 10, 250 leaves per ZKP
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose Appropriate Batch Sizes">
+    Larger batches are more efficient but take longer to fill. For high-traffic applications, use larger batches (500). For development or low traffic, use smaller batches (10).
+  </Accordion>
+  
+  <Accordion title="Monitor Rollover Threshold">
+    Watch `next_index` relative to capacity. Create new trees before old ones fill completely.
+  </Accordion>
+  
+  <Accordion title="Verify Bloom Filter State">
+    Always check bloom filters are properly zeroed before reusing batches.
+  </Accordion>
+  
+  <Accordion title="Cache Tree Metadata">
+    Tree metadata changes infrequently. Cache it to avoid repeated account reads.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Source Code" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/batched-merkle-tree">
+    View on GitHub
+  </Card>
+  <Card title="API Docs" icon="book" href="https://docs.rs/light-batched-merkle-tree">
+    Rust documentation
+  </Card>
+  <Card title="Account Compression Program" icon="server" href="/programs/account-compression">
+    On-chain program documentation
+  </Card>
+  <Card title="Forester Service" icon="tractor" href="/forester/overview">
+    Tree maintenance service
+  </Card>
+</CardGroup>

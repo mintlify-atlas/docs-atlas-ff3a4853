@@ -1,0 +1,419 @@
+---
+title: "Running the Prover Server"
+description: "Setup, configuration, and operation guide for the Light Protocol ZK prover server"
+---
+
+The prover server is a Go application that exposes an HTTP API for generating zero-knowledge proofs. It can run in standalone mode or with Redis queue support for distributed processing.
+
+## Installation
+
+### Prerequisites
+
+- Go 1.21 or later
+- 32+ GB RAM (64GB recommended for production)
+- 16+ CPU cores
+- 100+ GB disk space for proving keys
+
+### Building from Source
+
+```bash
+cd prover/server
+go build -o light-prover .
+```
+
+## Quick Start
+
+### Local Development
+
+Start the prover server with minimal configuration:
+
+```bash
+./light-prover start \
+  --keys-dir ./proving-keys/ \
+  --prover-address 0.0.0.0:3001 \
+  --auto-download
+```
+
+This will:
+- Start the HTTP server on port 3001
+- Auto-download proving keys as needed
+- Enable lazy loading (keys loaded on first use)
+
+<Info>
+The `--auto-download` flag enables automatic downloading of missing proving keys. Without this flag, you must manually download keys using the `download` command.
+</Info>
+
+### Production Setup
+
+```bash
+# Download all keys first (recommended)
+./light-prover download \
+  --run-mode forester \
+  --keys-dir ./proving-keys/
+
+# Start with Redis queue for distributed processing
+./light-prover start \
+  --keys-dir ./proving-keys/ \
+  --prover-address 0.0.0.0:3001 \
+  --metrics-address 0.0.0.0:9998 \
+  --redis-url redis://localhost:6379 \
+  --preload-keys forester
+```
+
+## Configuration
+
+### Command Line Flags
+
+<ParamField path="--prover-address" type="string" default="0.0.0.0:3001">
+  HTTP server listen address
+</ParamField>
+
+<ParamField path="--metrics-address" type="string" default="0.0.0.0:9998">
+  Prometheus metrics server address
+</ParamField>
+
+<ParamField path="--keys-dir" type="string" default="./proving-keys/">
+  Directory for storing proving key files
+</ParamField>
+
+<ParamField path="--redis-url" type="string">
+  Redis connection URL for queue mode (e.g., `redis://localhost:6379`)
+</ParamField>
+
+<ParamField path="--preload-keys" type="string" default="none">
+  Preload keys at startup: `none`, `all`, or a run mode (`rpc`, `forester`, `full`)
+</ParamField>
+
+<ParamField path="--circuit" type="string[]">
+  Specific circuits to enable (e.g., `update`, `append`, `address-append`)
+</ParamField>
+
+<ParamField path="--queue-only" type="boolean">
+  Run only queue workers (no HTTP server)
+</ParamField>
+
+<ParamField path="--server-only" type="boolean">
+  Run only HTTP server (no queue workers)
+</ParamField>
+
+<ParamField path="--auto-download" type="boolean">
+  Automatically download missing key files
+</ParamField>
+
+## Downloading Proving Keys
+
+Proving keys are large pre-computed files needed for proof generation.
+
+### By Run Mode
+
+Download keys for specific deployment scenarios:
+
+<CodeGroup>
+```bash Local RPC
+# Minimal keys for local testing
+./light-prover download --run-mode local-rpc
+```
+
+```bash RPC Server
+# Keys for inclusion/combined proofs (V1 circuits)
+./light-prover download --run-mode rpc
+```
+
+```bash Forester
+# Keys for batch operations (V2 circuits)
+./light-prover download --run-mode forester
+```
+
+```bash Full Node
+# All circuit keys (V1 + V2)
+./light-prover download --run-mode full
+```
+</CodeGroup>
+
+### By Circuit Type
+
+Download specific circuit keys:
+
+```bash
+./light-prover download \
+  --circuit update \
+  --circuit append \
+  --circuit address-append
+```
+
+### Verify Existing Keys
+
+```bash
+./light-prover download \
+  --run-mode forester \
+  --verify-only
+```
+
+## Run Modes
+
+Run modes determine which circuits are available:
+
+| Mode | Circuits | Use Case |
+|------|---------|----------|
+| `local-rpc` | Test circuits (small batch sizes) | Local development |
+| `rpc` | Inclusion, non-inclusion, combined | RPC nodes serving stateless.js |
+| `forester` | Batch append, update, address append | Forester tree maintenance |
+| `forester-test` | Test batch circuits | Forester testing |
+| `full` | All production circuits | Full nodes |
+| `full-test` | All circuits including tests | Development |
+
+## API Endpoints
+
+### POST /prove
+
+Generate a zero-knowledge proof.
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:3001/prove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "circuit": "update",
+    "treeHeight": 26,
+    "batchSize": 10,
+    "oldRoot": "...",
+    "newRoot": "...",
+    "leaves": [...],
+    "merkleProofs": [...]
+  }'
+```
+
+```json Sync Response (200 OK)
+{
+  "proof": {
+    "a": ["0x...", "0x..."],
+    "b": ["0x...", "0x..."],
+    "c": ["0x...", "0x..."]
+  },
+  "proof_duration_ms": 2345
+}
+```
+
+```json Async Response (202 Accepted)
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "estimated_time": "5s"
+}
+```
+</CodeGroup>
+
+### GET /prove/status
+
+Check proof job status.
+
+```bash
+curl "http://localhost:3001/prove/status?job_id=550e8400-e29b-41d4-a716-446655440000"
+```
+
+<CodeGroup>
+```json Processing
+{
+  "status": "processing",
+  "message": "Generating proof..."
+}
+```
+
+```json Completed
+{
+  "status": "completed",
+  "result": {
+    "proof": {
+      "a": ["0x...", "0x..."],
+      "b": ["0x...", "0x..."],
+      "c": ["0x...", "0x..."]
+    },
+    "proof_duration_ms": 2345
+  }
+}
+```
+
+```json Failed
+{
+  "status": "failed",
+  "message": "constraint system error: value does not satisfy constraint"
+}
+```
+</CodeGroup>
+
+### GET /health
+
+Health check endpoint.
+
+```bash
+curl http://localhost:3001/health
+```
+
+```json
+{
+  "status": "healthy",
+  "uptime": 3600,
+  "loaded_keys": 12
+}
+```
+
+## Redis Queue Mode
+
+### Architecture
+
+Redis queue mode enables horizontal scaling:
+
+- **Multiple Workers**: Run multiple prover instances processing the same queue
+- **Circuit-Specific Workers**: Each worker type processes specific circuit types
+- **Job Persistence**: Jobs survive server restarts
+- **Result Caching**: Completed proofs cached for client retrieval
+
+### Starting Queue Workers
+
+<CodeGroup>
+```bash All Workers
+./light-prover start \
+  --redis-url redis://localhost:6379 \
+  --keys-dir ./proving-keys/
+```
+
+```bash Specific Circuits
+./light-prover start \
+  --redis-url redis://localhost:6379 \
+  --circuit update \
+  --circuit append
+```
+
+```bash Workers Only (No HTTP)
+./light-prover start \
+  --redis-url redis://localhost:6379 \
+  --queue-only
+```
+
+```bash HTTP Only (No Workers)
+./light-prover start \
+  --redis-url redis://localhost:6379 \
+  --server-only
+```
+</CodeGroup>
+
+### Queue Cleanup
+
+The prover automatically cleans up old data:
+
+- **Stuck Jobs**: Every 10 seconds, requeue jobs stuck in processing state
+- **Old Requests**: Every 10 minutes, remove proof requests older than 1 hour
+- **Failed Jobs**: Every 30 minutes, remove failed jobs older than 1 hour  
+- **Old Results**: Every 30 minutes, remove results older than 1 hour
+
+## Metrics
+
+Prometheus metrics exposed on `--metrics-address`:
+
+### Key Metrics
+
+- `prover_proof_generation_duration_seconds` - Time to generate proofs by circuit type
+- `prover_proof_requests_total` - Total proof requests by circuit and status
+- `prover_active_jobs` - Currently processing jobs
+- `prover_queue_depth` - Pending jobs in queue by circuit type
+- `prover_key_load_duration_seconds` - Time to load proving keys
+
+### Example Prometheus Scrape Config
+
+```yaml
+scrape_configs:
+  - job_name: 'light-prover'
+    static_configs:
+      - targets: ['localhost:9998']
+```
+
+## Monitoring
+
+### Logs
+
+The prover outputs structured logs:
+
+<CodeGroup>
+```bash Text Format (Default)
+./light-prover start
+```
+
+```bash JSON Format
+./light-prover start --json-logging
+```
+</CodeGroup>
+
+### Health Checks
+
+```bash
+# Basic health check
+curl http://localhost:3001/health
+
+# Check if server is responsive
+if curl -sf http://localhost:3001/health > /dev/null; then
+  echo "Prover is healthy"
+else
+  echo "Prover is down"
+fi
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Out of Memory Errors">
+    **Symptom**: Server crashes or proofs fail with OOM errors
+    
+    **Solutions**:
+    - Increase available RAM (minimum 32GB, 64GB recommended)
+    - Reduce concurrent proof generation
+    - Use smaller batch sizes during development
+    - Close other memory-intensive applications
+  </Accordion>
+
+  <Accordion title="Missing Proving Keys">
+    **Symptom**: Error: "proving key file not found"
+    
+    **Solutions**:
+    - Download keys: `./light-prover download --run-mode forester`
+    - Enable auto-download: `--auto-download` flag
+    - Check disk space (keys require 100+ GB)
+    - Verify keys directory permissions
+  </Accordion>
+
+  <Accordion title="Slow Proof Generation">
+    **Symptom**: Proofs taking much longer than expected
+    
+    **Solutions**:
+    - Ensure adequate CPU cores (16+ recommended)
+    - Check system CPU throttling (thermal issues)
+    - Reduce concurrent proof jobs
+    - Use SSD storage for key files (not HDD)
+    - Monitor system load with `top` or `htop`
+  </Accordion>
+
+  <Accordion title="Constraint Errors">
+    **Symptom**: "constraint system error" in proof generation
+    
+    **Causes**:
+    - Invalid circuit inputs (wrong tree height, incorrect proofs)
+    - Mismatched Merkle proof length and tree height
+    - Invalid public input hash
+    - Circuit input validation failed
+    
+    **Solutions**:
+    - Verify input data matches circuit parameters
+    - Check that Merkle proofs are correct
+    - Ensure public input hash is calculated correctly
+    - Review circuit documentation for input requirements
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Circuit Details" icon="microchip" href="/prover/circuits">
+    Learn about circuit implementations and input formats
+  </Card>
+  <Card title="Forester Integration" icon="tree" href="/forester/overview">
+    Use the prover with the Forester service
+  </Card>
+</CardGroup>

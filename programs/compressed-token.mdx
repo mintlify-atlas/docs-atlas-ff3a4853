@@ -1,0 +1,568 @@
+---
+title: "Compressed Token Program"
+description: "SPL Token-compatible program for compressed tokens with Token-2022 extension support"
+---
+
+The Compressed Token program implements an SPL Token-compatible interface for compressed tokens. It supports both compressed tokens (stored in Merkle trees) and CToken accounts (decompressed but not SPL tokens).
+
+## Program ID
+
+```
+cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m
+```
+
+## Overview
+
+The Compressed Token program enables rent-free token operations through ZK compression while maintaining full compatibility with SPL Token interfaces. Tokens can exist in two forms:
+
+- **Compressed Tokens**: Stored as leaves in Merkle trees (rent-free)
+- **CToken Accounts**: Decompressed Solana accounts (SPL-compatible layout)
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="SPL Compatible" icon="handshake">
+    Matches SPL Token instruction interface
+  </Card>
+  <Card title="Token-2022 Extensions" icon="puzzle-piece">
+    Supports metadata, transfer fees, and more
+  </Card>
+  <Card title="Compression/Decompression" icon="compress">
+    Seamlessly move between compressed and decompressed
+  </Card>
+  <Card title="Rent Management" icon="dollar-sign">
+    Compressible extension for rent reclamation
+  </Card>
+</CardGroup>
+
+## Account Types
+
+### Compressed Token (TokenData)
+
+Compressed token account stored in a Merkle tree.
+
+<ParamField path="mint" type="Pubkey" required>
+  Compressed mint address
+</ParamField>
+
+<ParamField path="owner" type="Pubkey" required>
+  Token account owner
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Token balance
+</ParamField>
+
+<ParamField path="delegate" type="Option<Pubkey>">
+  Optional delegate authority
+</ParamField>
+
+<ParamField path="state" type="AccountState" required>
+  Account state: Initialized, Frozen, or Uninitialized
+</ParamField>
+
+<ParamField path="tlv" type="Vec<u8>">
+  Type-length-value encoded extensions (for Token-2022 compatibility)
+</ParamField>
+
+**Discriminator:** 
+- V1: `[2, 0, 0, 0, 0, 0, 0, 0]` (little-endian, Poseidon hashed)
+- V2: `[0, 0, 0, 0, 0, 0, 0, 3]` (big-endian, Poseidon hashed)
+- ShaFlat: `[0, 0, 0, 0, 0, 0, 0, 4]` (big-endian, SHA-256 truncated)
+
+**Source:** `program-libs/token-interface/src/state/compressed_token/token_data.rs`
+
+### CToken Account (Decompressed)
+
+Solana account with SPL Token-compatible layout.
+
+<ParamField path="mint" type="Pubkey" required>
+  Mint address (compressed or decompressed)
+</ParamField>
+
+<ParamField path="owner" type="Pubkey" required>
+  Account owner
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Token balance
+</ParamField>
+
+<ParamField path="delegate" type="Option<Pubkey>">
+  Optional delegate
+</ParamField>
+
+<ParamField path="state" type="AccountState" required>
+  Initialized, Frozen, or Uninitialized
+</ParamField>
+
+<ParamField path="is_native" type="Option<u64>">
+  Native token amount (not supported)
+</ParamField>
+
+<ParamField path="delegated_amount" type="u64">
+  Amount delegated to delegate
+</ParamField>
+
+<ParamField path="close_authority" type="Option<Pubkey>">
+  Authority that can close the account
+</ParamField>
+
+<ParamField path="extensions" type="Vec<ExtensionStruct>">
+  Token-2022 extensions:
+  - `Compressible`: Rent management data
+  - `PausableAccount`: Pausable account marker
+  - `PermanentDelegate`: Permanent delegate marker
+  - `TransferHook`: Transfer hook configuration
+  - `TransferFee`: Transfer fee configuration
+</ParamField>
+
+**Associated Token Account Seeds:** `[owner, program_id, mint]`
+
+**Source:** `program-libs/token-interface/src/state/ctoken/ctoken_struct.rs`
+
+### Compressed Mint
+
+Mint account for compressed tokens.
+
+<ParamField path="mint_authority" type="Option<Pubkey>">
+  Authority that can mint tokens
+</ParamField>
+
+<ParamField path="supply" type="u64" required>
+  Total supply of tokens minted
+</ParamField>
+
+<ParamField path="decimals" type="u8" required>
+  Number of decimals
+</ParamField>
+
+<ParamField path="is_initialized" type="bool" required>
+  Whether mint is initialized
+</ParamField>
+
+<ParamField path="freeze_authority" type="Option<Pubkey>">
+  Authority that can freeze accounts
+</ParamField>
+
+<ParamField path="metadata" type="Option<TokenMetadata>">
+  Optional Token-2022 metadata extension:
+  - `name`: Token name
+  - `symbol`: Token symbol
+  - `uri`: Metadata URI
+</ParamField>
+
+**Source:** `program-libs/token-interface/src/state/mint/compressed_mint.rs`
+
+## Instruction Reference
+
+### Token Account Management
+
+<AccordionGroup>
+  <Accordion title="CreateTokenAccount (18)" icon="plus">
+    Creates a regular CToken account.
+
+    **Accounts:**
+    - `fee_payer` (signer, writable)
+    - `authority` (signer)
+    - `token_account` (writable): Account to create
+    - `mint`: Mint account
+    - `compressible_config`: Optional config for compressible extension
+    - `rent_recipient`: Optional rent sponsor
+    - `system_program`
+
+    **Parameters:**
+    - `compressible`: Whether to add Compressible extension
+
+    **Source:** `programs/compressed-token/program/src/ctoken/create.rs`
+  </Accordion>
+
+  <Accordion title="CreateAssociatedTokenAccount (100)" icon="link">
+    Creates an associated token account (deterministic address).
+
+    **Derivation:** Seeds `[owner, program_id, mint]`
+
+    **Source:** `programs/compressed-token/program/src/ctoken/create_ata.rs`
+  </Accordion>
+
+  <Accordion title="CreateAssociatedTokenAccountIdempotent (102)" icon="check-double">
+    Creates ATA, succeeds if already exists.
+
+    **Use Case:** Safe to call multiple times
+
+    **Source:** `programs/compressed-token/program/src/ctoken/create_ata.rs`
+  </Accordion>
+
+  <Accordion title="CloseTokenAccount (9)" icon="xmark">
+    Closes a CToken account.
+
+    **Process:**
+    1. Requires zero balance
+    2. Returns rent exemption to rent recipient (if compressible)
+    3. Returns remaining lamports to destination
+
+    **Source:** `programs/compressed-token/program/src/ctoken/close/`
+  </Accordion>
+</AccordionGroup>
+
+### Transfer Operations
+
+<AccordionGroup>
+  <Accordion title="Transfer2 (101)" icon="arrow-right-arrow-left">
+    Batch transfer instruction supporting multiple operations.
+
+    **Modes:**
+    - **Compress**: Convert SPL/CToken to compressed token
+    - **Decompress**: Convert compressed token to CToken
+    - **CompressAndClose**: Compress CToken and close account
+    - **Transfer**: Standard compressed token transfer
+
+    **Parameters:**
+    - `inputs`: Input compressed tokens (to spend)
+    - `outputs`: Output compressed tokens (to create)
+    - `mint_indices`: Multi-mint support (map outputs to mints)
+    - `compression_indices`: Map compression operations to inputs
+    - `proof`: ZK proof for state transitions
+
+    **Multi-Mint:** Supports multiple mints in single transaction with sum checks per mint
+
+    **Source:** `programs/compressed-token/program/src/compressed_token/transfer2/`
+  </Accordion>
+
+  <Accordion title="CTokenTransfer (3)" icon="exchange">
+    Transfer between CToken accounts (decompressed).
+
+    **Accounts:**
+    - `source` (writable): Source CToken account
+    - `destination` (writable): Destination CToken account  
+    - `authority` (signer): Source owner or delegate
+
+    **Parameters:**
+    - `amount`: Amount to transfer
+
+    **Source:** `programs/compressed-token/program/src/ctoken/transfer/default.rs`
+  </Accordion>
+
+  <Accordion title="CTokenTransferChecked (12)" icon="circle-check">
+    Transfer with decimals validation.
+
+    **Additional Parameter:**
+    - `decimals`: Must match mint decimals
+
+    **Source:** `programs/compressed-token/program/src/ctoken/transfer/checked.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Mint Operations
+
+<AccordionGroup>
+  <Accordion title="MintAction (103)" icon="wand-magic-sparkles">
+    Batch instruction for mint management and minting.
+
+    **Actions:**
+    - `CreateCompressedMint`: Create new compressed mint
+    - `MintTo`: Mint to compressed token
+    - `MintToCToken`: Mint to CToken account
+    - `UpdateMintAuthority`: Change mint authority
+    - `UpdateFreezeAuthority`: Change freeze authority
+    - `UpdateMetadataField`: Update metadata (name, symbol, URI)
+    - `UpdateMetadataAuthority`: Change metadata authority
+    - `RemoveMetadataKey`: Remove metadata field
+    - `DecompressMint`: Convert compressed mint to SPL mint
+    - `CompressAndCloseCMint`: Compress mint and close CToken
+
+    **Source:** `programs/compressed-token/program/src/compressed_token/mint_action/`
+  </Accordion>
+
+  <Accordion title="CTokenMintTo (7)" icon="coins">
+    Mint tokens to CToken account.
+
+    **Accounts:**
+    - `mint` (writable): Mint account
+    - `destination` (writable): CToken account
+    - `authority` (signer): Mint authority
+
+    **Parameters:**
+    - `amount`: Amount to mint
+
+    **Source:** `programs/compressed-token/program/src/ctoken/mint_to.rs`
+  </Accordion>
+
+  <Accordion title="CTokenMintToChecked (14)" icon="stamp">
+    Mint with decimals validation.
+
+    **Additional Parameter:**
+    - `decimals`: Must match mint
+
+    **Source:** `programs/compressed-token/program/src/ctoken/mint_to.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Burn Operations
+
+<AccordionGroup>
+  <Accordion title="CTokenBurn (8)" icon="fire">
+    Burn tokens from CToken account.
+
+    **Accounts:**
+    - `token_account` (writable): Account to burn from
+    - `mint` (writable): Mint to decrease supply
+    - `authority` (signer): Owner or delegate
+
+    **Parameters:**
+    - `amount`: Amount to burn
+
+    **Source:** `programs/compressed-token/program/src/ctoken/burn.rs`
+  </Accordion>
+
+  <Accordion title="CTokenBurnChecked (15)" icon="fire-flame-curved">
+    Burn with decimals validation.
+
+    **Source:** `programs/compressed-token/program/src/ctoken/burn.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Delegate Operations
+
+<AccordionGroup>
+  <Accordion title="CTokenApprove (4)" icon="user-check">
+    Approve a delegate on CToken account.
+
+    **Accounts:**
+    - `token_account` (writable): Account to delegate
+    - `delegate`: Delegate address
+    - `owner` (signer): Account owner
+
+    **Parameters:**
+    - `amount`: Amount to delegate
+
+    **Source:** `programs/compressed-token/program/src/ctoken/approve_revoke.rs`
+  </Accordion>
+
+  <Accordion title="CTokenRevoke (5)" icon="user-xmark">
+    Revoke delegate from CToken account.
+
+    **Source:** `programs/compressed-token/program/src/ctoken/approve_revoke.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Freeze Operations
+
+<AccordionGroup>
+  <Accordion title="CTokenFreezeAccount (10)" icon="snowflake">
+    Freeze a CToken account.
+
+    **Accounts:**
+    - `token_account` (writable): Account to freeze
+    - `mint`: Mint account
+    - `authority` (signer): Freeze authority
+
+    **Effect:** Sets account state to Frozen, preventing transfers
+
+    **Source:** `programs/compressed-token/program/src/ctoken/freeze_thaw.rs`
+  </Accordion>
+
+  <Accordion title="CTokenThawAccount (11)" icon="sun">
+    Thaw a frozen CToken account.
+
+    **Effect:** Sets account state back to Initialized
+
+    **Source:** `programs/compressed-token/program/src/ctoken/freeze_thaw.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Rent Management (Compressible Extension)
+
+<AccordionGroup>
+  <Accordion title="Claim (104)" icon="hand-holding-dollar">
+    Claims rent from expired compressible accounts.
+
+    **Accounts:**
+    - `rent_recipient` (writable): Receives claimed rent
+    - `token_account` (writable): Compressible account to claim from
+    - `compressible_config`: Config with expiry settings
+    - `rent_authority`: Optional authority for claiming
+
+    **Requirements:**
+    - Account must be compressible (`is_compressible()` returns true)
+    - Config must not be inactive
+
+    **Process:**
+    1. Checks if account is expired based on config
+    2. Transfers rent exemption to rent recipient
+    3. Closes the account
+
+    **Source:** `programs/compressed-token/program/src/compressible/claim.rs`
+  </Accordion>
+
+  <Accordion title="WithdrawFundingPool (105)" icon="money-bill-transfer">
+    Withdraws funds from rent recipient pool.
+
+    **Accounts:**
+    - `rent_recipient` (writable): Rent recipient account
+    - `destination` (writable): Withdrawal destination
+    - `compressible_config`: Associated config
+    - `rent_sponsor` (signer): Must match config
+
+    **Parameters:**
+    - `amount`: Amount to withdraw
+
+    **Source:** `programs/compressed-token/program/src/compressible/withdraw_funding_pool.rs`
+  </Accordion>
+</AccordionGroup>
+
+## Token-2022 Extensions
+
+The Compressed Token program supports these Token-2022 extensions:
+
+<CardGroup cols={2}>
+  <Card title="TokenMetadata" icon="tag">
+    Name, symbol, URI for mints
+  </Card>
+  <Card title="Compressible" icon="clock">
+    Custom extension for rent management
+  </Card>
+  <Card title="TransferFee" icon="percent">
+    Configurable transfer fees
+  </Card>
+  <Card title="TransferHook" icon="anchor">
+    Custom transfer validation
+  </Card>
+  <Card title="PausableAccount" icon="pause">
+    Account can be paused
+  </Card>
+  <Card title="PermanentDelegate" icon="crown">
+    Permanent delegate authority
+  </Card>
+</CardGroup>
+
+**Extension Validation:** All extensions are validated for compatibility across compression/decompression operations.
+
+**Source:** `programs/compressed-token/program/src/extensions/`
+
+## Usage Examples
+
+### Creating a Compressed Token
+
+```typescript
+import { createMint, mintTo } from '@lightprotocol/compressed-token';
+import { Rpc } from '@lightprotocol/stateless.js';
+
+const rpc: Rpc = createRpc(rpcEndpoint, proverEndpoint);
+
+// Create compressed mint
+const { mint, transactionSignature } = await createMint(
+  rpc,
+  payer,
+  mintAuthority.publicKey,
+  9, // decimals
+);
+
+console.log(`Mint created: ${mint}`);
+
+// Mint compressed tokens
+const mintToResult = await mintTo(
+  rpc,
+  payer,
+  mint,
+  destination,
+  mintAuthority,
+  1_000_000_000, // 1 token (with 9 decimals)
+);
+```
+
+### Transferring Compressed Tokens
+
+```typescript
+import { transfer } from '@lightprotocol/compressed-token';
+
+const transferResult = await transfer(
+  rpc,
+  payer,
+  mint,
+  500_000_000, // 0.5 tokens
+  owner,
+  recipient.publicKey,
+);
+
+console.log(`Transfer signature: ${transferResult.transactionSignature}`);
+```
+
+### Compressing SPL Tokens
+
+```typescript
+import { compress } from '@lightprotocol/compressed-token';
+import { getAssociatedTokenAddress } from '@solana/spl-token';
+
+// Get SPL token account
+const tokenAccount = await getAssociatedTokenAddress(
+  mint,
+  owner.publicKey,
+);
+
+// Compress SPL tokens to compressed tokens
+const compressResult = await compress(
+  rpc,
+  payer,
+  mint,
+  1_000_000_000, // amount to compress
+  owner,
+  tokenAccount,
+);
+```
+
+### Decompressing to CToken Account
+
+```typescript
+import { decompress } from '@lightprotocol/compressed-token';
+
+// Decompress compressed tokens to CToken account
+const decompressResult = await decompress(
+  rpc,
+  payer,
+  mint,
+  500_000_000, // amount to decompress
+  owner,
+  recipientCTokenAccount,
+);
+```
+
+## Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| 4000 | MintMismatch | Token accounts have different mints |
+| 4001 | InsufficientFunds | Insufficient balance for operation |
+| 4002 | InvalidMint | Mint account invalid or uninitialized |
+| 4003 | OwnerMismatch | Authority doesn't match owner |
+| 4004 | AccountFrozen | Account is frozen |
+| 4005 | InvalidDelegate | Delegate not authorized |
+| 4006 | MintDecimalsMismatch | Decimals don't match mint |
+| 4007 | SumCheckFailed | Input/output amounts don't match |
+| 4008 | InvalidExtension | Token-2022 extension validation failed |
+| 4009 | CompressibleConfigInactive | Config is inactive |
+| 4010 | NotCompressible | Account not eligible for compression |
+
+**Source:** 
+- `programs/compressed-token/anchor/src/lib.rs` (ErrorCode enum)
+- `program-libs/token-interface/src/error.rs` (CTokenError enum)
+
+## Source Code
+
+View the full source code on GitHub:
+
+- [Compressed Token Program](https://github.com/Lightprotocol/light-protocol/tree/main/programs/compressed-token)
+- [Token Interface Library](https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/token-interface)
+- [Compressible Library](https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/compressible)
+- [Complete Documentation](https://github.com/Lightprotocol/light-protocol/tree/main/programs/compressed-token/program/docs)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Token Quickstart" icon="rocket" href="/quickstart">
+    Build your first compressed token app
+  </Card>
+  <Card title="Registry Program" icon="database" href="/programs/registry">
+    Learn about protocol configuration
+  </Card>
+</CardGroup>

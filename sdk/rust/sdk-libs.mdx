@@ -1,0 +1,695 @@
+---
+title: "SDK Libraries Reference"
+description: "Detailed reference for Light Protocol Rust SDK libraries"
+---
+
+## SDK Library Structure
+
+The Light Protocol SDK is organized into focused libraries, each serving a specific purpose in the development stack.
+
+```
+sdk-libs/
+├── sdk/                      # Core SDK for on-chain programs
+├── client/                   # RPC client for off-chain interactions
+├── token-sdk/                # Token operations SDK
+├── compressed-token-sdk/     # Compressed token utilities
+├── account/                  # Compressed account types
+├── sdk-types/                # Shared type definitions
+├── macros/                   # Procedural macros
+├── program-test/             # Testing utilities
+└── photon-api/               # Photon indexer API client
+```
+
+## light-sdk
+
+### Cargo.toml
+
+```toml
+[dependencies]
+light-sdk = { version = "0.23.0", features = ["anchor", "v2"] }
+```
+
+### Core Modules
+
+#### account
+
+Compressed account abstraction similar to Anchor's `Account`.
+
+```rust
+use light_sdk::account::LightAccount;
+
+// Create new compressed account
+let mut account = LightAccount::<MyData>::new_init(
+    &program_id,
+    Some(address),
+    output_tree_index,
+);
+
+// Update existing account
+let mut account = LightAccount::<MyData>::new_mut(
+    &program_id,
+    &account_meta,
+    existing_data,
+)?;
+
+// Close account
+let account = LightAccount::<MyData>::new_close(
+    &program_id,
+    &account_meta,
+    existing_data,
+)?;
+```
+
+<ParamField path="new_init" type="method">
+  Create a new compressed account for initialization
+  
+  **Parameters:**
+  - `program_id: &Pubkey` - Program that owns the account
+  - `address: Option<[u8; 32]>` - Optional address for the account
+  - `tree_index: u8` - Index of the state tree to use
+</ParamField>
+
+<ParamField path="new_mut" type="method">
+  Load existing compressed account for mutation
+  
+  **Parameters:**
+  - `program_id: &Pubkey` - Program that owns the account
+  - `meta: &CompressedAccountMeta` - Account metadata from instruction
+  - `data: T` - Deserialized account data
+</ParamField>
+
+<ParamField path="new_close" type="method">
+  Load compressed account for closing
+  
+  **Parameters:**
+  - `program_id: &Pubkey` - Program that owns the account
+  - `meta: &CompressedAccountMeta` - Account metadata from instruction
+  - `data: T` - Deserialized account data
+</ParamField>
+
+#### address
+
+Functions to derive compressed account addresses.
+
+```rust
+use light_sdk::address::v1::derive_address;
+
+let (address, seed) = derive_address(
+    &[b"my-account", user.key().as_ref()],
+    &address_tree_pubkey,
+    &program_id,
+);
+```
+
+<ParamField path="derive_address" type="function">
+  Derive a deterministic address for a compressed account
+  
+  **Parameters:**
+  - `seeds: &[&[u8]]` - Seed bytes for derivation
+  - `address_tree: &Pubkey` - Address Merkle tree pubkey
+  - `program_id: &Pubkey` - Owner program ID
+  
+  **Returns:** `([u8; 32], [u8; 32])` - Address and address seed
+</ParamField>
+
+#### cpi
+
+Utilities to invoke the Light System Program via CPI.
+
+```rust
+use light_sdk::cpi::{
+    v2::lowlevel::InstructionDataInvokeCpiWithReadOnly,
+    CpiAccounts, InvokeLightSystemProgram,
+};
+
+// Parse CPI accounts
+let light_cpi_accounts = CpiAccounts::new(
+    fee_payer.as_ref(),
+    remaining_accounts,
+    LIGHT_CPI_SIGNER,
+);
+
+// Build and invoke CPI
+InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+    .mode_v1()
+    .with_light_account(my_account)?
+    .with_new_addresses(&[new_address_params])
+    .invoke(light_cpi_accounts)?;
+```
+
+<ParamField path="CpiAccounts" type="struct">
+  Parses remaining accounts for Light System Program CPI
+  
+  **Fields:**
+  - `fee_payer: &AccountInfo` - Transaction fee payer
+  - `remaining_accounts: &[AccountInfo]` - All remaining accounts
+  - `cpi_signer: CpiSigner` - Program's CPI authority
+</ParamField>
+
+<ParamField path="InstructionDataInvokeCpiWithReadOnly" type="struct">
+  Builder for Light System Program CPI instructions
+  
+  **Methods:**
+  - `new_cpi(signer, proof)` - Create new CPI instruction
+  - `mode_v1()` / `mode_v2()` - Set Merkle tree version
+  - `with_light_account(account)` - Add compressed account
+  - `with_new_addresses(params)` - Add new addresses
+  - `invoke(accounts)` - Execute the CPI
+</ParamField>
+
+#### instruction
+
+Types for building instructions with compressed accounts.
+
+```rust
+use light_sdk::instruction::{
+    account_meta::{CompressedAccountMeta, CompressedAccountMetaBurn},
+    PackedAddressTreeInfo,
+    ValidityProof,
+};
+
+// Client-side: Pack address tree info
+let address_tree_info = PackedAddressTreeInfo {
+    tree_index: 0,
+    address_tree_offset: 0,
+};
+
+// Program-side: Parse compressed account metadata
+let account_meta = CompressedAccountMeta {
+    hash: account_hash,
+    address: Some(account_address),
+    tree_index: 0,
+    leaf_index: 42,
+};
+```
+
+<ParamField path="CompressedAccountMeta" type="struct">
+  Metadata for a compressed account in instruction data
+  
+  **Fields:**
+  - `hash: [u8; 32]` - Account data hash
+  - `address: Option<[u8; 32]>` - Account address (if any)
+  - `tree_index: u8` - Index of the state tree
+  - `leaf_index: u32` - Leaf index in the tree
+</ParamField>
+
+<ParamField path="ValidityProof" type="struct">
+  Zero-knowledge proof that verifies compressed account state exists and new addresses don't exist
+  
+  **Size:** 128 bytes (constant for any number of accounts)
+  
+  **Obtained from:** RPC `getValidityProof` method
+</ParamField>
+
+<ParamField path="PackedAddressTreeInfo" type="struct">
+  Compact representation of address tree information for instruction data
+  
+  **Fields:**
+  - `tree_index: u8` - Index of address tree in remaining accounts
+  - `address_tree_offset: u8` - Offset to address tree accounts
+</ParamField>
+
+### Macros
+
+#### LightDiscriminator
+
+Derive a discriminator for compressed account types.
+
+```rust
+use light_sdk::LightDiscriminator;
+
+#[derive(Clone, Debug, Default, LightDiscriminator)]
+pub struct MyAccount {
+    pub owner: Pubkey,
+    pub counter: u64,
+}
+```
+
+#### LightHasher
+
+Derive a hasher implementation for compressed accounts.
+
+```rust
+use light_sdk::LightHasher;
+
+#[derive(Clone, Debug, LightHasher, LightDiscriminator)]
+pub struct MyAccount {
+    pub data: Vec<u8>,
+}
+```
+
+#### derive_light_cpi_signer!
+
+Generate CPI signer constant from program ID.
+
+```rust
+use light_sdk::{derive_light_cpi_signer, CpiSigner};
+
+declare_id!("YourProgramIDHere");
+
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("YourProgramIDHere");
+```
+
+### Dependencies
+
+Key dependencies in `light-sdk`:
+
+```toml
+[dependencies]
+solana-pubkey = "2.4.0"
+solana-account-info = "2.2"
+solana-instruction = "2.3"
+anchor-lang = { version = "0.31.1", optional = true }
+borsh = "0.10.4"
+
+# Light Protocol dependencies
+light-sdk-types = { version = "0.23.0" }
+light-compressed-account = { version = "0.11.0" }
+light-hasher = { version = "5.0.0" }
+light-account-checks = { version = "0.8.0" }
+light-sdk-macros = { version = "0.23.0" }
+```
+
+## light-client
+
+### Cargo.toml
+
+```toml
+[dependencies]
+light-client = { version = "0.23.0", features = ["v2"] }
+tokio = { version = "1.48", features = ["rt", "macros", "rt-multi-thread"] }
+```
+
+### Core Modules
+
+#### rpc
+
+RPC client for Solana and Photon indexer.
+
+```rust
+use light_client::rpc::{LightClient, LightClientConfig, Rpc};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to local validator
+    let mut rpc = LightClient::new(LightClientConfig::local()).await?;
+    
+    // Connect to devnet with API key
+    let mut rpc = LightClient::new(LightClientConfig::new(
+        "https://devnet.helius-rpc.com".to_string(),
+        Some("https://photon.helius.com?api-key=YOUR_KEY".to_string()),
+    )).await?;
+    
+    Ok(())
+}
+```
+
+<ParamField path="LightClient" type="struct">
+  Combined Solana RPC and Photon indexer client
+  
+  **Methods:**
+  - `new(config)` - Create new client
+  - `get_slot()` - Get current slot
+  - `get_balance(pubkey)` - Get account balance
+  - Standard Solana RPC methods
+  - Photon indexer methods (via `Indexer` trait)
+</ParamField>
+
+<ParamField path="LightClientConfig" type="struct">
+  Configuration for Light client connections
+  
+  **Methods:**
+  - `local()` - Connect to local test validator
+  - `new(rpc_url, photon_url)` - Custom RPC endpoints
+</ParamField>
+
+#### indexer
+
+Query compressed accounts from Photon indexer.
+
+```rust
+use light_client::indexer::{Indexer, IndexerRpcConfig};
+use solana_pubkey::Pubkey;
+
+let owner = Pubkey::new_unique();
+let slot = rpc.get_slot().await?;
+
+let config = IndexerRpcConfig {
+    slot,
+    retry_config: RetryConfig::default(),
+};
+
+// Get all compressed accounts owned by address
+let accounts = rpc
+    .get_compressed_accounts_by_owner(&owner, None, Some(config))
+    .await?;
+
+for account in accounts.value.items {
+    println!("Hash: {:?}", account.hash);
+    println!("Data: {:?}", account.data);
+}
+```
+
+<ParamField path="Indexer" type="trait">
+  Trait for querying compressed accounts
+  
+  **Methods:**
+  - `get_compressed_accounts_by_owner(owner, cursor, config)` - Query by owner
+  - `get_compressed_account(hash, config)` - Get single account
+  - `get_validity_proof(hashes, addresses, config)` - Get validity proof
+  - `get_multiple_compressed_accounts(hashes, config)` - Batch query
+</ParamField>
+
+#### local_test_validator
+
+Spawn local test validator with Light Protocol programs.
+
+```rust
+use light_client::local_test_validator::{
+    spawn_validator,
+    LightValidatorConfig,
+};
+
+let config = LightValidatorConfig {
+    enable_indexer: true,
+    enable_prover: true,
+    wait_time: 75,
+    sbf_programs: vec![],
+    upgradeable_programs: vec![],
+    limit_ledger_size: None,
+    use_surfpool: true,
+    validator_args: vec![],
+};
+
+spawn_validator(config).await;
+```
+
+<ParamField path="LightValidatorConfig" type="struct">
+  Configuration for local test validator
+  
+  **Fields:**
+  - `enable_indexer: bool` - Start Photon indexer
+  - `enable_prover: bool` - Start prover server
+  - `wait_time: u64` - Seconds to wait for services
+  - `sbf_programs: Vec<(String, Pubkey)>` - Custom programs to deploy
+  - `limit_ledger_size: Option<u64>` - Limit ledger size
+  - `use_surfpool: bool` - Use surfpool prover service
+</ParamField>
+
+### Dependencies
+
+Key dependencies in `light-client`:
+
+```toml
+[dependencies]
+solana-rpc-client = "2.3"
+solana-rpc-client-api = "2.3"
+solana-pubkey = "2.4.0"
+tokio = { version = "1.48", features = ["rt", "time"] }
+reqwest = "0.12"
+
+# Light Protocol dependencies
+light-sdk = { version = "0.23.0", features = ["v2", "cpi-context"] }
+light-prover-client = { version = "8.0.0" }
+photon-api = { version = "0.56.0" }
+light-compressed-token-sdk = { version = "0.23.0" }
+```
+
+## light-token
+
+### Cargo.toml
+
+```toml
+[dependencies]
+light-token = { version = "0.23.0", features = ["anchor"] }
+```
+
+### Core Modules
+
+#### instruction
+
+Instruction builders and CPI functions for token operations.
+
+```rust
+use light_token::instruction::{
+    CreateMintCpi,
+    CreateAssociatedAccountCpi,
+    MintToCpi,
+    TransferInterfaceCpi,
+};
+
+// Create mint CPI
+CreateMintCpi::new(
+    &authority,
+    &mint_pubkey,
+    decimals,
+    Some(TokenMetadata { /* ... */ }),
+)
+.invoke(accounts)?;
+
+// Transfer interface (auto-detects account types)
+TransferInterfaceCpi::new(
+    &from,
+    &to,
+    &authority,
+    &mint,
+    amount,
+)
+.invoke(accounts)?;
+```
+
+#### Available CPI Builders
+
+<AccordionGroup>
+  <Accordion title="CreateMintCpi">
+    Create a new Light mint
+    
+    **Parameters:**
+    - `authority: &Pubkey` - Mint authority
+    - `mint: &Pubkey` - Mint address
+    - `decimals: u8` - Token decimals
+    - `metadata: Option<TokenMetadata>` - Token metadata
+  </Accordion>
+
+  <Accordion title="CreateAssociatedAccountCpi">
+    Create associated token account
+    
+    **Parameters:**
+    - `payer: &Pubkey` - Transaction payer
+    - `owner: &Pubkey` - Token account owner
+    - `mint: &Pubkey` - Token mint
+  </Accordion>
+
+  <Accordion title="CreateTokenAccountCpi">
+    Create token account with custom address
+    
+    **Parameters:**
+    - `payer: &Pubkey` - Transaction payer
+    - `owner: &Pubkey` - Token account owner
+    - `mint: &Pubkey` - Token mint
+    - `account: &Pubkey` - Account address
+  </Accordion>
+
+  <Accordion title="MintToCpi / MintToCheckedCpi">
+    Mint tokens to account
+    
+    **Parameters:**
+    - `mint: &Pubkey` - Token mint
+    - `destination: &Pubkey` - Destination account
+    - `authority: &Pubkey` - Mint authority
+    - `amount: u64` - Amount to mint
+    - `decimals: u8` - Token decimals (checked variant)
+  </Accordion>
+
+  <Accordion title="TransferCpi / TransferCheckedCpi">
+    Transfer tokens between accounts
+    
+    **Parameters:**
+    - `from: &Pubkey` - Source account
+    - `to: &Pubkey` - Destination account
+    - `authority: &Pubkey` - Transfer authority
+    - `mint: &Pubkey` - Token mint
+    - `amount: u64` - Amount to transfer
+    - `decimals: u8` - Token decimals (checked variant)
+  </Accordion>
+
+  <Accordion title="TransferInterfaceCpi">
+    Transfer with automatic account type detection
+    
+    **Auto-detects:** SPL token accounts, Light token accounts, compressed token accounts
+    
+    **Parameters:**
+    - `from: &Pubkey` - Source account
+    - `to: &Pubkey` - Destination account
+    - `authority: &Pubkey` - Transfer authority
+    - `mint: &Pubkey` - Token mint
+    - `amount: u64` - Amount to transfer
+  </Accordion>
+
+  <Accordion title="BurnCpi / BurnCheckedCpi">
+    Burn tokens from account
+    
+    **Parameters:**
+    - `account: &Pubkey` - Token account
+    - `mint: &Pubkey` - Token mint
+    - `authority: &Pubkey` - Burn authority
+    - `amount: u64` - Amount to burn
+    - `decimals: u8` - Token decimals (checked variant)
+  </Accordion>
+
+  <Accordion title="ApproveCpi">
+    Approve delegate for token account
+    
+    **Parameters:**
+    - `account: &Pubkey` - Token account
+    - `delegate: &Pubkey` - Delegate address
+    - `owner: &Pubkey` - Account owner
+    - `amount: u64` - Approved amount
+  </Accordion>
+
+  <Accordion title="RevokeCpi">
+    Revoke delegate approval
+    
+    **Parameters:**
+    - `account: &Pubkey` - Token account
+    - `owner: &Pubkey` - Account owner
+  </Accordion>
+
+  <Accordion title="FreezeCpi / ThawCpi">
+    Freeze or thaw token account
+    
+    **Parameters:**
+    - `account: &Pubkey` - Token account
+    - `mint: &Pubkey` - Token mint
+    - `authority: &Pubkey` - Freeze authority
+  </Accordion>
+
+  <Accordion title="CloseAccountCpi">
+    Close token account and reclaim rent
+    
+    **Parameters:**
+    - `account: &Pubkey` - Token account to close
+    - `destination: &Pubkey` - Recipient of remaining lamports
+    - `owner: &Pubkey` - Account owner
+  </Accordion>
+</AccordionGroup>
+
+### Constants
+
+```rust
+use light_token::{
+    LIGHT_TOKEN_PROGRAM_ID,
+    LIGHT_TOKEN_CPI_AUTHORITY,
+};
+
+// Program ID
+pub const LIGHT_TOKEN_PROGRAM_ID: Pubkey = /* ... */;
+
+// CPI authority PDA
+pub const LIGHT_TOKEN_CPI_AUTHORITY: Pubkey = /* ... */;
+```
+
+### Dependencies
+
+Key dependencies in `light-token`:
+
+```toml
+[dependencies]
+light-sdk = { version = "0.23.0", features = ["v2", "cpi-context"] }
+light-compressed-token-sdk = { version = "0.23.0" }
+light-token-interface = { version = "0.5.0" }
+light-compressed-account = { version = "0.11.0" }
+solana-pubkey = "2.4.0"
+anchor-lang = { version = "0.31.1", optional = true }
+borsh = "0.10.4"
+```
+
+## Supporting Libraries
+
+### light-program-test
+
+**Purpose:** Fast local test environment using LiteSVM
+
+```toml
+[dev-dependencies]
+light-program-test = "0.23.0"
+```
+
+```rust
+use light_program_test::test_env::setup_test_env;
+
+#[tokio::test]
+async fn test_my_program() {
+    let mut context = setup_test_env().await;
+    // Test your program
+}
+```
+
+### light-sdk-macros
+
+**Purpose:** Procedural macros for compressed accounts
+
+- `#[derive(LightDiscriminator)]` - 8-byte discriminator for account types
+- `#[derive(LightHasher)]` - Hash implementation for Merkle tree state
+- `#[derive(AnchorDiscriminator)]` - Anchor-compatible discriminator
+- `derive_light_cpi_signer!()` - Generate CPI signer from program ID
+- `derive_light_rent_sponsor!()` - Generate rent sponsor PDA
+
+### photon-api
+
+**Purpose:** API client for Photon indexer
+
+```rust
+use photon_api::apis::default_api;
+
+let config = photon_api::apis::configuration::Configuration {
+    base_path: "https://photon.helius.com".to_string(),
+    // ...
+};
+
+let response = default_api::get_compressed_accounts_by_owner(
+    &config,
+    owner_address,
+    None, // cursor
+    None, // limit
+).await?;
+```
+
+## Version Information
+
+<Note>
+All SDK libraries are versioned together at **0.23.0** to ensure compatibility.
+</Note>
+
+### Workspace Dependencies
+
+From `Cargo.toml`:
+
+```toml
+[workspace.dependencies]
+# Light Protocol SDK
+light-sdk = { path = "sdk-libs/sdk", version = "0.23.0" }
+light-client = { path = "sdk-libs/client", version = "0.23.0" }
+light-token = { path = "sdk-libs/token-sdk", version = "0.23.0" }
+light-sdk-types = { path = "sdk-libs/sdk-types", version = "0.23.0" }
+light-account = { path = "sdk-libs/account", version = "0.23.0" }
+light-program-test = { path = "sdk-libs/program-test", version = "0.23.0" }
+
+# Solana
+solana-program = "2.3"
+solana-sdk = "2.3"
+anchor-lang = "0.31.1"
+borsh = "0.10.4"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Program Integration" icon="code" href="/sdk/rust/program-integration">
+    Learn how to integrate Light SDK into your Solana programs
+  </Card>
+  <Card title="Testing Guide" icon="flask" href="/guides/testing">
+    Set up testing for compressed account programs
+  </Card>
+</CardGroup>

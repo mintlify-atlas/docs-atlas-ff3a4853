@@ -1,0 +1,624 @@
+---
+title: "Running a Forester Node"
+description: "Complete guide to setting up, configuring, and operating a Light Protocol forester node"
+---
+
+This guide walks through setting up a production-ready forester node that processes Light Protocol's Merkle tree queues.
+
+## Prerequisites
+
+### System Requirements
+
+<CardGroup cols={2}>
+  <Card title="Hardware" icon="server">
+    - **CPU**: 8+ cores
+    - **RAM**: 16+ GB
+    - **Storage**: 50+ GB SSD
+    - **Network**: 100+ Mbps
+  </Card>
+  <Card title="Software" icon="code">
+    - Rust 1.75+
+    - Cargo
+    - Git
+    - (Optional) Docker
+  </Card>
+</CardGroup>
+
+### External Services
+
+<Steps>
+  <Step title="Solana RPC">
+    High-performance RPC endpoint (Helius, QuickNode, Triton, or self-hosted)
+  </Step>
+  <Step title="Photon Indexer">
+    Indexer API for queue status and Merkle proofs
+  </Step>
+  <Step title="ZK Prover">
+    Prover server for generating zero-knowledge proofs (self-hosted or service)
+  </Step>
+  <Step title="(Optional) Metrics Stack">
+    Prometheus and Grafana for monitoring
+  </Step>
+</Steps>
+
+## Installation
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/Lightprotocol/light-protocol
+cd light-protocol
+
+# Build the forester
+cd forester
+cargo build --release
+
+# Binary will be at target/release/forester
+./target/release/forester --version
+```
+
+### Using Docker
+
+```dockerfile
+FROM rust:1.75 as builder
+
+WORKDIR /build
+COPY . .
+RUN cd forester && cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/forester/target/release/forester /usr/local/bin/
+
+ENTRYPOINT ["forester"]
+```
+
+```bash
+# Build image
+docker build -t light-forester .
+
+# Run container
+docker run -d \
+  --name forester \
+  --env-file .env \
+  light-forester start
+```
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file with your configuration:
+
+```bash .env
+# Core RPC Configuration
+RPC_URL="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY"
+WS_RPC_URL="wss://mainnet.helius-rpc.com/?api-key=YOUR_KEY"
+
+# Indexer
+INDEXER_URL="https://photon.helius.com?api-key=YOUR_KEY"
+
+# Prover Configuration
+PROVER_URL="http://prover.example.com:3001"
+PROVER_APPEND_URL="http://prover.example.com:3001/append"
+PROVER_UPDATE_URL="http://prover.example.com:3001/update"
+PROVER_ADDRESS_APPEND_URL="http://prover.example.com:3001/address-append"
+PROVER_API_KEY="your-prover-api-key"
+
+# Authentication
+# Generate with: solana-keygen new --no-bip39-passphrase
+PAYER='[1,2,3,...,64]'  # Your keypair as byte array
+DERIVATION_PUBKEY='[1,2,3,...,32]'  # Forester authority pubkey
+
+# Performance Tuning
+RPC_POOL_SIZE=100
+MAX_CONCURRENT_SENDS=200
+TRANSACTION_MAX_CONCURRENT_BATCHES=20
+CU_LIMIT=400000
+ENABLE_PRIORITY_FEES=true
+
+# Processor Mode
+PROCESSOR_MODE=all  # Options: v1, v2, all
+```
+
+<Warning>
+**Security**: Never commit your `.env` file or expose private keys. Store them securely using environment variables or a secrets manager.
+</Warning>
+
+### Required Configuration
+
+<ParamField path="RPC_URL" type="string" required>
+  Solana RPC endpoint URL for transaction submission
+</ParamField>
+
+<ParamField path="INDEXER_URL" type="string" required>
+  Photon indexer URL for queue status and Merkle proofs
+</ParamField>
+
+<ParamField path="PROVER_URL" type="string" required>
+  ZK prover server base URL
+</ParamField>
+
+<ParamField path="PAYER" type="string" required>
+  Transaction signer keypair as JSON byte array `[1,2,...,64]`
+</ParamField>
+
+<ParamField path="DERIVATION_PUBKEY" type="string" required>
+  Forester authority public key as JSON byte array `[1,2,...,32]`
+</ParamField>
+
+### Optional Configuration
+
+<ParamField path="WS_RPC_URL" type="string">
+  WebSocket RPC URL for compressible account tracking
+</ParamField>
+
+<ParamField path="PROVER_API_KEY" type="string">
+  API key for prover authentication
+</ParamField>
+
+<ParamField path="RPC_POOL_SIZE" type="number" default="100">
+  Number of RPC connections to maintain in the pool
+</ParamField>
+
+<ParamField path="MAX_CONCURRENT_SENDS" type="number" default="200">
+  Maximum concurrent transaction submissions
+</ParamField>
+
+<ParamField path="CU_LIMIT" type="number" default="400000">
+  Compute unit limit per transaction
+</ParamField>
+
+<ParamField path="ENABLE_PRIORITY_FEES" type="boolean" default="false">
+  Enable dynamic priority fee calculation
+</ParamField>
+
+<ParamField path="PROCESSOR_MODE" type="string" default="all">
+  Tree processing mode: `v1`, `v2`, or `all`
+</ParamField>
+
+## Starting the Forester
+
+### Basic Startup
+
+```bash
+# Load environment variables
+source .env
+
+# Start the forester
+forester start
+```
+
+### Production Startup
+
+```bash
+forester start \
+  --rpc-url "$RPC_URL" \
+  --ws-rpc-url "$WS_RPC_URL" \
+  --indexer-url "$INDEXER_URL" \
+  --prover-url "$PROVER_URL" \
+  --payer "$PAYER" \
+  --derivation "$DERIVATION_PUBKEY" \
+  --rpc-pool-size 100 \
+  --max-concurrent-sends 500 \
+  --cu-limit 400000 \
+  --enable-priority-fees true \
+  --processor-mode all
+```
+
+### Development Startup
+
+```bash
+# Run with local prover and devnet
+forester start \
+  --rpc-url http://127.0.0.1:8899 \
+  --indexer-url http://127.0.0.1:8784 \
+  --prover-url http://127.0.0.1:3001 \
+  --payer "$PAYER" \
+  --derivation "$DERIVATION_PUBKEY"
+```
+
+## Systemd Service
+
+Create a systemd service for automatic startup and management:
+
+```ini /etc/systemd/system/forester.service
+[Unit]
+Description=Light Protocol Forester
+After=network.target
+
+[Service]
+Type=simple
+User=forester
+Group=forester
+WorkingDirectory=/home/forester
+EnvironmentFile=/home/forester/.env
+ExecStart=/home/forester/forester start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable forester
+sudo systemctl start forester
+
+# Check status
+sudo systemctl status forester
+
+# View logs
+sudo journalctl -u forester -f
+```
+
+## Health Checks
+
+The forester provides a health check command:
+
+```bash
+# Check wallet balance
+forester health \
+  --check-balance \
+  --rpc-url "$RPC_URL" \
+  --payer "$PAYER" \
+  --min-balance 0.5
+
+# Check registration status
+forester health \
+  --check-registration \
+  --rpc-url "$RPC_URL" \
+  --payer "$PAYER" \
+  --derivation "$DERIVATION_PUBKEY"
+
+# JSON output for monitoring
+forester health \
+  --check-balance \
+  --check-registration \
+  --output json
+```
+
+### Example Health Check Script
+
+```bash health-check.sh
+#!/bin/bash
+
+RESULT=$(forester health \
+  --check-balance \
+  --check-registration \
+  --rpc-url "$RPC_URL" \
+  --payer "$PAYER" \
+  --derivation "$DERIVATION_PUBKEY" \
+  --min-balance 0.5 \
+  --output json \
+  --exit-on-failure false)
+
+BALANCE_OK=$(echo $RESULT | jq -r '.balance.healthy')
+REGISTRATION_OK=$(echo $RESULT | jq -r '.registration.healthy')
+
+if [ "$BALANCE_OK" != "true" ]; then
+  echo "ALERT: Low balance!"
+  # Send alert (e.g., PagerDuty, Slack)
+fi
+
+if [ "$REGISTRATION_OK" != "true" ]; then
+  echo "WARNING: Not registered for current epoch"
+fi
+```
+
+## Status Checks
+
+Monitor queue status and tree health:
+
+```bash
+# Check all queues
+forester status --rpc-url "$RPC_URL"
+
+# Check protocol configuration
+forester status --protocol-config --rpc-url "$RPC_URL"
+
+# Full status with compressed token tests
+forester status --full --rpc-url "$RPC_URL"
+
+# Check specific queue types
+forester status --queue --rpc-url "$RPC_URL"
+```
+
+### Example Status Output
+
+```
+StateV2 CsmN5RUVH... APPEND:
+  next_index: 1000
+  total_completed_operations: 950
+  total_unprocessed_items: 50
+  pending_batch_index: 10
+  zkp_batch_size: 100
+  SUMMARY: 1000 items added, 950 items processed, 50 items pending
+  
+StateV2 CsmN5RUVH... NULLIFY:
+  next_index: 800  
+  total_completed_operations: 750
+  total_unprocessed_items: 50
+  pending_batch_index: 8
+  zkp_batch_size: 100
+  SUMMARY: 800 items added, 750 items processed, 50 items pending
+
+AddressV2 AddrT6Rv...: 
+  next_index: 500
+  total_unprocessed_items: 25
+  pending_batch_index: 5
+  zkp_batch_size: 100
+  Total pending ADDRESS operations: 25
+```
+
+## Filtering Trees
+
+Process specific trees or authorities:
+
+### By Tree ID
+
+```bash
+# Process only specific trees
+forester start \
+  --tree-id CsmN5RUVHaKYmW3F71KvJH6HGCPYKEh1vGmM7R3dPSZH \
+  --tree-id AddrT6RvSxzVqvZmWKpZCg41q1nzMmkMcWL4E7a8TqR
+```
+
+### By Group Authority
+
+```bash
+# Process trees owned by specific authority
+forester start \
+  --group-authority BxTFZEeZKo8e4u7Sh2TxJAQm9WbkqNadhGFhZ3UaHgVH
+```
+
+<Info>
+Filtering is useful for running multiple foresters that process different subsets of trees, enabling horizontal scaling.
+</Info>
+
+## Performance Tuning
+
+### RPC Pool Configuration
+
+```bash
+forester start \
+  --rpc-pool-size 100 \
+  --rpc-pool-connection-timeout-secs 15 \
+  --rpc-pool-idle-timeout-secs 300 \
+  --rpc-pool-max-retries 100
+```
+
+### Transaction Batching
+
+```bash
+forester start \
+  --max-concurrent-sends 500 \
+  --transaction-max-concurrent-batches 20 \
+  --cu-limit 400000 \
+  --enable-priority-fees true
+```
+
+### Indexer Batching
+
+```bash
+forester start \
+  --indexer-batch-size 50 \
+  --indexer-max-concurrent-batches 10
+```
+
+### Cache Configuration
+
+```bash
+forester start \
+  --tx-cache-ttl-seconds 180 \
+  --ops-cache-ttl-seconds 180
+```
+
+## Monitoring Setup
+
+### Prometheus Configuration
+
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'forester'
+    static_configs:
+      - targets: ['localhost:9092']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+```
+
+### Push Gateway
+
+```bash
+forester start \
+  --push-gateway-url http://pushgateway:9091/metrics/job/forester
+```
+
+### PagerDuty Alerts
+
+```bash
+forester start \
+  --pagerduty-routing-key your-integration-key
+```
+
+## API Server
+
+The forester includes an HTTP API for monitoring:
+
+```bash
+forester start \
+  --api-server-port 8080 \
+  --api-server-public-bind  # Bind to 0.0.0.0 instead of 127.0.0.1
+```
+
+### API Endpoints
+
+**GET /health**
+Health check endpoint
+
+```bash
+curl http://localhost:8080/health
+```
+
+**GET /metrics**
+Prometheus metrics
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+**GET /status**
+Forester status and queue information
+
+```bash
+curl http://localhost:8080/status
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Insufficient SOL Balance">
+    **Symptom**: Forester stops processing, logs show "insufficient funds"
+    
+    **Solution**:
+    ```bash
+    # Check balance
+    solana balance YOUR_PUBKEY
+    
+    # Top up wallet
+    solana transfer YOUR_PUBKEY 1 --from FUNDING_WALLET
+    
+    # Monitor balance with health checks
+    forester health --check-balance --min-balance 0.5
+    ```
+  </Accordion>
+
+  <Accordion title="RPC Rate Limiting">
+    **Symptom**: "429 Too Many Requests" errors in logs
+    
+    **Solutions**:
+    - Reduce `rpc-pool-size`
+    - Reduce `max-concurrent-sends`
+    - Upgrade RPC plan for higher rate limits
+    - Add rate limiting config:
+    ```bash
+    forester start \
+      --rpc-rate-limit 100 \
+      --send-tx-rate-limit 50
+    ```
+  </Accordion>
+
+  <Accordion title="Prover Timeouts">
+    **Symptom**: "proof generation timed out" errors
+    
+    **Solutions**:
+    - Increase prover timeout:
+    ```bash
+    forester start \
+      --prover-max-wait-time-secs 900
+    ```
+    - Check prover server health and capacity
+    - Verify network connectivity to prover
+    - Scale up prover resources (CPU/RAM)
+  </Accordion>
+
+  <Accordion title="Transaction Failures">
+    **Symptom**: Repeated transaction failures, no progress on queues
+    
+    **Debugging**:
+    ```bash
+    # Check recent logs
+    journalctl -u forester -n 100
+    
+    # Check transaction status
+    solana transaction-history YOUR_PUBKEY
+    
+    # Verify tree accounts exist
+    forester status --rpc-url "$RPC_URL"
+    ```
+    
+    **Common Causes**:
+    - Incorrect tree state (rollover needed)
+    - Invalid proofs from prover
+    - Network congestion (enable priority fees)
+    - Epoch transition (wait for new epoch)
+  </Accordion>
+
+  <Accordion title="High Memory Usage">
+    **Symptom**: Forester consuming excessive RAM
+    
+    **Solutions**:
+    - Reduce concurrent operations:
+    ```bash
+    forester start \
+      --max-concurrent-sends 100 \
+      --transaction-max-concurrent-batches 10
+    ```
+    - Reduce cache sizes:
+    ```bash
+    forester start \
+      --tx-cache-ttl-seconds 60 \
+      --ops-cache-ttl-seconds 60
+    ```
+    - Filter to specific trees:
+    ```bash
+    forester start --tree-id TREE_PUBKEY
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Wallet Management" icon="wallet">
+    - Maintain 1+ SOL balance
+    - Set up balance alerts
+    - Use dedicated wallet for forester
+    - Automate balance top-ups
+  </Card>
+  
+  <Card title="Redundancy" icon="shield-halved">
+    - Run multiple forester instances
+    - Use different RPC providers
+    - Deploy across multiple regions
+    - Monitor all instances
+  </Card>
+  
+  <Card title="Security" icon="lock">
+    - Never expose private keys
+    - Use environment variables
+    - Restrict API server access
+    - Enable firewall rules
+  </Card>
+  
+  <Card title="Monitoring" icon="chart-line">
+    - Set up Prometheus + Grafana
+    - Configure PagerDuty alerts
+    - Monitor SOL balance
+    - Track transaction success rate
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Queue Management" icon="list" href="/forester/queue-management">
+    Learn about queue processing strategies and liveness
+  </Card>
+  <Card title="Prover Setup" icon="microchip" href="/prover/server">
+    Set up your own ZK prover server
+  </Card>
+</CardGroup>

@@ -1,0 +1,706 @@
+---
+title: 'CLI Commands'
+description: 'Complete reference for all Light Protocol CLI commands'
+---
+
+# CLI Commands Reference
+
+Complete command reference for the Light Protocol CLI. All commands use the format:
+
+```bash
+light <command> [flags]
+```
+
+## Configuration
+
+### config
+
+Initialize or update configuration values for RPC endpoints.
+
+```bash
+light config [--solanaRpcUrl <url>] [--indexerUrl <url>] [--proverUrl <url>] [--get]
+```
+
+<ParamField path="--solanaRpcUrl" type="string">
+  Solana RPC URL endpoint
+</ParamField>
+
+<ParamField path="--indexerUrl" type="string">
+  Photon indexer URL endpoint
+</ParamField>
+
+<ParamField path="--proverUrl" type="string">
+  Light prover server URL endpoint
+</ParamField>
+
+<ParamField path="--get" type="boolean">
+  Display current configuration values
+</ParamField>
+
+<CodeGroup>
+
+```bash View Config
+light config --get
+```
+
+```bash Set Devnet
+light config \
+  --solanaRpcUrl "https://devnet.helius-rpc.com/?api-key=<KEY>" \
+  --indexerUrl "https://devnet.helius-rpc.com/?api-key=<KEY>" \
+  --proverUrl "https://devnet.helius-rpc.com/?api-key=<KEY>"
+```
+
+```bash Set Localnet
+light config \
+  --solanaRpcUrl "http://127.0.0.1:8899" \
+  --indexerUrl "http://127.0.0.1:8784" \
+  --proverUrl "http://127.0.0.1:3001"
+```
+
+</CodeGroup>
+
+<Info>
+Configuration is stored at `~/.config/light/config.json` by default. Override with `LIGHT_PROTOCOL_CONFIG` environment variable.
+</Info>
+
+---
+
+## Token Management
+
+### create-mint
+
+Create a new compressed token mint.
+
+```bash
+light create-mint [--mint-keypair <path>] [--mint-authority <address>] [--mint-decimals <number>]
+```
+
+<ParamField path="--mint-keypair" type="string">
+  Path to mint keypair file. If not provided, a random keypair is generated.
+</ParamField>
+
+<ParamField path="--mint-authority" type="string">
+  Address of the mint authority. Defaults to the fee payer.
+</ParamField>
+
+<ParamField path="--mint-decimals" type="integer" default="9">
+  Number of decimal places (base 10 digits right of decimal).
+</ParamField>
+
+<CodeGroup>
+
+```bash Random Keypair
+light create-mint
+```
+
+```bash Custom Decimals
+light create-mint --mint-decimals 6
+```
+
+```bash With Keypair File
+light create-mint \
+  --mint-keypair ./keys/mint.json \
+  --mint-decimals 6
+```
+
+```bash Custom Authority
+light create-mint \
+  --mint-authority 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --mint-decimals 9
+```
+
+</CodeGroup>
+
+### mint-to
+
+Mint compressed tokens to a recipient address.
+
+```bash
+light mint-to --mint <address> --to <address> --amount <number> [--mint-authority <path>]
+```
+
+<ParamField path="--mint" type="string" required>
+  Mint address
+</ParamField>
+
+<ParamField path="--to" type="string" required>
+  Recipient address
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to mint in tokens (respects mint decimals)
+</ParamField>
+
+<ParamField path="--mint-authority" type="string">
+  Filepath to mint authority keypair. Defaults to local Solana wallet.
+</ParamField>
+
+<CodeGroup>
+
+```bash Basic Mint
+light mint-to \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000000
+```
+
+```bash With Custom Authority
+light mint-to \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000000 \
+  --mint-authority ./keys/authority.json
+```
+
+</CodeGroup>
+
+### approve-and-mint-to
+
+Mint tokens to a compressed account via external mint authority. Similar to `mint-to` but designed for scenarios with delegated minting authority.
+
+```bash
+light approve-and-mint-to --mint <address> --to <address> --amount <number> [--mint-authority <path>]
+```
+
+<ParamField path="--mint" type="string" required>
+  Mint address
+</ParamField>
+
+<ParamField path="--to" type="string" required>
+  Recipient address
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to mint in tokens
+</ParamField>
+
+<ParamField path="--mint-authority" type="string">
+  Filepath to mint authority keypair. Defaults to local Solana wallet.
+</ParamField>
+
+```bash Example
+light approve-and-mint-to \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000000 \
+  --mint-authority ./keys/external-authority.json
+```
+
+### transfer
+
+Transfer compressed tokens from one account to another.
+
+```bash
+light transfer --mint <address> --to <address> --amount <number> [--fee-payer <path>]
+```
+
+<ParamField path="--mint" type="string" required>
+  Mint address to transfer
+</ParamField>
+
+<ParamField path="--to" type="string" required>
+  Recipient address
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to send in tokens
+</ParamField>
+
+<ParamField path="--fee-payer" type="string">
+  Fee payer account keypair path. Defaults to local Solana wallet.
+</ParamField>
+
+<CodeGroup>
+
+```bash Basic Transfer
+light transfer \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000
+```
+
+```bash Custom Fee Payer
+light transfer \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000 \
+  --fee-payer ./keys/payer.json
+```
+
+</CodeGroup>
+
+### create-token-pool
+
+Register an existing SPL token mint with the compressed token program to enable compression.
+
+```bash
+light create-token-pool --mint <address>
+```
+
+<ParamField path="--mint" type="string" required>
+  Base58-encoded mint address to register
+</ParamField>
+
+```bash Example
+light create-token-pool \
+  --mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+```
+
+<Info>
+This creates the interface required for compressing and decompressing an existing SPL token mint.
+</Info>
+
+---
+
+## Compression Operations
+
+### compress-sol
+
+Compress native SOL into a compressed account.
+
+```bash
+light compress-sol --to <address> --amount <lamports>
+```
+
+<ParamField path="--to" type="string" required>
+  Recipient address for the compressed SOL
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to compress in lamports (1 SOL = 1,000,000,000 lamports)
+</ParamField>
+
+<CodeGroup>
+
+```bash Compress 0.01 SOL
+light compress-sol \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 10000000
+```
+
+```bash Compress 1 SOL
+light compress-sol \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000000
+```
+
+</CodeGroup>
+
+### decompress-sol
+
+Decompress compressed SOL back to native SOL.
+
+```bash
+light decompress-sol --to <address> --amount <lamports>
+```
+
+<ParamField path="--to" type="string" required>
+  Recipient address for the decompressed SOL
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to decompress in lamports
+</ParamField>
+
+```bash Example
+light decompress-sol \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 10000000
+```
+
+### compress-spl
+
+Compress SPL tokens into compressed token accounts.
+
+```bash
+light compress-spl --mint <address> --to <address> --amount <number>
+```
+
+<ParamField path="--mint" type="string" required>
+  SPL token mint address
+</ParamField>
+
+<ParamField path="--to" type="string" required>
+  Recipient address (owner of destination compressed token account)
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to compress in tokens
+</ParamField>
+
+```bash Example
+light compress-spl \
+  --mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000
+```
+
+<Note>
+The source is the associated token account of the fee payer. Ensure sufficient SPL token balance before compressing.
+</Note>
+
+### decompress-spl
+
+Decompress compressed tokens back into SPL tokens.
+
+```bash
+light decompress-spl --mint <address> --to <address> --amount <number>
+```
+
+<ParamField path="--mint" type="string" required>
+  Token mint address
+</ParamField>
+
+<ParamField path="--to" type="string" required>
+  Recipient address (owner of destination token account)
+</ParamField>
+
+<ParamField path="--amount" type="integer" required>
+  Amount to decompress in tokens
+</ParamField>
+
+```bash Example
+light decompress-spl \
+  --mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+  --to 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ \
+  --amount 1000000
+```
+
+<Info>
+If the recipient's associated token account doesn't exist, it will be created automatically.
+</Info>
+
+---
+
+## Account Queries
+
+### balance
+
+Get compressed SOL balance for an address.
+
+```bash
+light balance --owner <address>
+```
+
+<ParamField path="--owner" type="string" required>
+  Address to check balance for
+</ParamField>
+
+```bash Example
+light balance --owner 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ
+```
+
+**Output:**
+```
+Compressed SOL balance: 1000000000
+```
+
+### token-balance
+
+Get compressed token balance for a specific mint and owner.
+
+```bash
+light token-balance --mint <address> --owner <address>
+```
+
+<ParamField path="--mint" type="string" required>
+  Mint address of the compressed token
+</ParamField>
+
+<ParamField path="--owner" type="string" required>
+  Address of the token account owner
+</ParamField>
+
+```bash Example
+light token-balance \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263 \
+  --owner 7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ
+```
+
+**Output:**
+```
+Balance: 1000000000
+```
+
+<Tip>
+If no token accounts are found, the command returns a balance of 0.
+</Tip>
+
+### merge-token-accounts
+
+Consolidate all compressed token accounts for a specific mint into a single account.
+
+```bash
+light merge-token-accounts --mint <address> [--fee-payer <path>]
+```
+
+<ParamField path="--mint" type="string" required>
+  Mint address to merge accounts for
+</ParamField>
+
+<ParamField path="--fee-payer" type="string">
+  Fee payer account keypair path. Defaults to local Solana wallet.
+</ParamField>
+
+```bash Example
+light merge-token-accounts \
+  --mint DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+```
+
+<Info>
+Merging reduces the number of accounts, which can improve performance and reduce transaction complexity for future operations.
+</Info>
+
+---
+
+## Development Tools
+
+### test-validator
+
+Start a local test environment with validator, indexer, and prover. See the [Test Validator](/cli/test-validator) page for complete documentation.
+
+```bash
+light test-validator [flags]
+```
+
+**Common flags:**
+- `--skip-indexer` - Run without Photon indexer
+- `--skip-prover` - Run without prover service
+- `--forester` - Enable forester service
+- `--rpc-port <port>` - Custom RPC port (default: 8899)
+- `--devnet` - Clone Devnet state
+- `--mainnet` - Clone Mainnet state
+- `--stop` - Stop the validator
+
+```bash Example
+light test-validator --forester --verbose
+```
+
+### start-prover
+
+Start a standalone prover server for generating zero-knowledge proofs.
+
+```bash
+light start-prover [--prover-port <port>] [--redisUrl <url>]
+```
+
+<ParamField path="--prover-port" type="integer" default="3001">
+  Port for the Light prover server
+</ParamField>
+
+<ParamField path="--redisUrl" type="string">
+  Redis URL for the prover (e.g., `redis://localhost:6379`). Can also be set via `REDIS_URL` environment variable.
+</ParamField>
+
+<CodeGroup>
+
+```bash Default Port
+light start-prover
+```
+
+```bash Custom Port
+light start-prover --prover-port 4001
+```
+
+```bash With Redis
+light start-prover \
+  --prover-port 3001 \
+  --redisUrl redis://localhost:6379
+```
+
+</CodeGroup>
+
+<Info>
+The prover performs a health check on startup. If it fails, check that all required binaries are present and accessible.
+</Info>
+
+---
+
+## Common Workflows
+
+### Complete Token Lifecycle
+
+<Steps>
+  <Step title="Start Test Environment">
+    ```bash
+    light test-validator
+    ```
+  </Step>
+  
+  <Step title="Create Mint">
+    ```bash
+    light create-mint --mint-decimals 9
+    ```
+    Note the mint address from the output.
+  </Step>
+  
+  <Step title="Mint Tokens">
+    ```bash
+    light mint-to \
+      --mint <MINT_ADDRESS> \
+      --to $(solana address) \
+      --amount 1000000000
+    ```
+  </Step>
+  
+  <Step title="Check Balance">
+    ```bash
+    light token-balance \
+      --mint <MINT_ADDRESS> \
+      --owner $(solana address)
+    ```
+  </Step>
+  
+  <Step title="Transfer Tokens">
+    ```bash
+    light transfer \
+      --mint <MINT_ADDRESS> \
+      --to <RECIPIENT_ADDRESS> \
+      --amount 100000000
+    ```
+  </Step>
+</Steps>
+
+### Compress Existing SPL Tokens
+
+<Steps>
+  <Step title="Register Mint">
+    ```bash
+    light create-token-pool --mint <EXISTING_MINT>
+    ```
+  </Step>
+  
+  <Step title="Compress Tokens">
+    ```bash
+    light compress-spl \
+      --mint <EXISTING_MINT> \
+      --to $(solana address) \
+      --amount 1000000
+    ```
+  </Step>
+  
+  <Step title="Verify">
+    ```bash
+    light token-balance \
+      --mint <EXISTING_MINT> \
+      --owner $(solana address)
+    ```
+  </Step>
+</Steps>
+
+### Work with Compressed SOL
+
+<Steps>
+  <Step title="Compress SOL">
+    ```bash
+    light compress-sol \
+      --to $(solana address) \
+      --amount 100000000
+    ```
+  </Step>
+  
+  <Step title="Check Balance">
+    ```bash
+    light balance --owner $(solana address)
+    ```
+  </Step>
+  
+  <Step title="Decompress SOL">
+    ```bash
+    light decompress-sol \
+      --to $(solana address) \
+      --amount 50000000
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Tips and Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use environment variables for addresses">
+    Save frequently used addresses as environment variables:
+    
+    ```bash
+    export MINT_ADDRESS="DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+    export RECIPIENT="7tEr3KHXFxnK4CqmVtzq3JLqnHHp8zEkeFQq9J4bLxKQ"
+    
+    light transfer --mint $MINT_ADDRESS --to $RECIPIENT --amount 1000
+    ```
+  </Accordion>
+  
+  <Accordion title="Check balances after operations">
+    Always verify balances after compression/decompression:
+    
+    ```bash
+    # After compress-sol
+    light balance --owner $(solana address)
+    
+    # After compress-spl
+    light token-balance --mint $MINT --owner $(solana address)
+    ```
+  </Accordion>
+  
+  <Accordion title="Use decimal conversion for token amounts">
+    For a mint with 9 decimals:
+    - 1 token = 1,000,000,000 (1e9)
+    - 0.1 tokens = 100,000,000 (1e8)
+    - 0.001 tokens = 1,000,000 (1e6)
+    
+    For a mint with 6 decimals (like USDC):
+    - 1 token = 1,000,000 (1e6)
+    - 0.1 tokens = 100,000 (1e5)
+  </Accordion>
+  
+  <Accordion title="Keep test validator running">
+    The test validator maintains state between commands. Don't restart unless needed:
+    
+    ```bash
+    # Start once
+    light test-validator
+    
+    # In another terminal, run commands
+    light create-mint
+    light mint-to ...
+    light transfer ...
+    ```
+  </Accordion>
+  
+  <Accordion title="Save transaction IDs">
+    Save transaction signatures for reference:
+    
+    ```bash
+    light mint-to ... > tx.log
+    
+    # Or extract with grep
+    light mint-to ... | grep "txId" > transactions.txt
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Getting Help
+
+Every command supports the `--help` flag:
+
+```bash
+light --help                 # List all commands
+light transfer --help        # Get detailed help for transfer
+light test-validator --help  # Get detailed help for test-validator
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Test Validator" icon="server" href="/cli/test-validator">
+    Deep dive into local development setup
+  </Card>
+  <Card title="Compressed Tokens" icon="coins" href="/guides/compressed-tokens">
+    Build applications with compressed tokens
+  </Card>
+  <Card title="JavaScript SDK" icon="js" href="/sdk/stateless-js/overview">
+    Integrate with your JavaScript apps
+  </Card>
+</CardGroup>

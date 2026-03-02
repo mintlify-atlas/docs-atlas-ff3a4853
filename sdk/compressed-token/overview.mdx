@@ -1,0 +1,641 @@
+---
+title: "@lightprotocol/compressed-token Overview"
+description: "JavaScript client for compressed SPL tokens"
+---
+
+## Introduction
+
+`@lightprotocol/compressed-token` provides a complete JavaScript API for working with compressed SPL tokens on Light Protocol. It enables you to create mints, transfer tokens, and manage compressed token accounts with the same developer experience as standard SPL tokens, but with significantly reduced costs.
+
+## Installation
+
+```bash npm
+npm install @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+
+```bash yarn
+yarn add @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+
+```bash pnpm
+pnpm add @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+
+## Package Information
+
+<CardGroup cols={2}>
+  <Card title="Version" icon="tag">
+    0.23.0-beta.8
+  </Card>
+  <Card title="License" icon="scale-balanced">
+    Apache-2.0
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+### Create a Mint
+
+Create a new compressed token mint (V1 - SPL mint with compressed accounts):
+
+```typescript
+import { createMint } from '@lightprotocol/compressed-token';
+import { createRpc } from '@lightprotocol/stateless.js';
+import { Keypair } from '@solana/web3.js';
+
+const rpc = createRpc();
+const payer = Keypair.generate();
+const mintAuthority = Keypair.generate();
+
+// Create a new mint with 9 decimals
+const { mint, transactionSignature } = await createMint(
+  rpc,
+  payer,
+  mintAuthority.publicKey,
+  9  // decimals
+);
+
+console.log('Mint created:', mint.toBase58());
+console.log('Transaction:', transactionSignature);
+```
+
+### Mint Tokens
+
+Mint compressed tokens to a recipient:
+
+```typescript
+import { mintTo } from '@lightprotocol/compressed-token';
+import { bn } from '@lightprotocol/stateless.js';
+
+const recipient = Keypair.generate().publicKey;
+
+// Mint 1000 tokens (with 9 decimals = 1000 * 10^9)
+const signature = await mintTo(
+  rpc,
+  payer,
+  mint,
+  recipient,
+  mintAuthority,
+  bn(1000_000_000_000)
+);
+
+console.log('Minted tokens:', signature);
+```
+
+### Transfer Tokens
+
+Transfer compressed tokens between accounts:
+
+```typescript
+import { transfer } from '@lightprotocol/compressed-token';
+
+const owner = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Transfer 100 tokens
+const signature = await transfer(
+  rpc,
+  payer,
+  mint,
+  bn(100_000_000_000),
+  owner,
+  recipient
+);
+
+console.log('Transfer complete:', signature);
+```
+
+### Query Token Accounts
+
+Fetch compressed token accounts owned by a public key:
+
+```typescript
+const tokenAccounts = await rpc.getCompressedTokenAccountsByOwner(
+  owner.publicKey,
+  { mint }
+);
+
+console.log('Token accounts:', tokenAccounts.items.length);
+tokenAccounts.items.forEach(account => {
+  console.log('Balance:', account.parsed.amount.toString());
+  console.log('Mint:', account.parsed.mint.toBase58());
+});
+```
+
+## V2: Compressed Mints (Beta)
+
+<Note>
+V2 features are in beta and require setting `LIGHT_PROTOCOL_BETA=true` environment variable.
+</Note>
+
+V2 introduces fully compressed mints where the mint account itself is compressed:
+
+### Create Compressed Mint
+
+```typescript
+import { createMintInterface } from '@lightprotocol/compressed-token';
+import { LIGHT_TOKEN_PROGRAM_ID } from '@lightprotocol/stateless.js';
+
+// Create a fully compressed mint (V2)
+const { mint, transactionSignature } = await createMintInterface(
+  rpc,
+  payer,
+  mintAuthority,  // Must be a Signer for compressed mints
+  null,           // freeze authority
+  9,              // decimals
+  Keypair.generate(),  // mint keypair
+  undefined,      // confirm options
+  LIGHT_TOKEN_PROGRAM_ID  // Use light-token program
+);
+
+console.log('Compressed mint:', mint.toBase58());
+```
+
+### With Token Metadata
+
+Add metadata to your compressed mint:
+
+```typescript
+import type { TokenMetadataInstructionData } from '@lightprotocol/compressed-token';
+
+const metadata: TokenMetadataInstructionData = {
+  name: 'My Token',
+  symbol: 'MTK',
+  uri: 'https://example.com/token-metadata.json',
+};
+
+const { mint } = await createMintInterface(
+  rpc,
+  payer,
+  mintAuthority,
+  null,
+  9,
+  Keypair.generate(),
+  undefined,
+  LIGHT_TOKEN_PROGRAM_ID,
+  metadata  // Token metadata
+);
+```
+
+## Core Concepts
+
+### Token Accounts
+
+Compressed token accounts store token balances in Merkle trees:
+
+```typescript
+interface ParsedTokenAccount {
+  compressedAccount: CompressedAccountWithMerkleContext;
+  parsed: TokenData;
+}
+
+interface TokenData {
+  mint: PublicKey;
+  owner: PublicKey;
+  amount: BN;
+  delegate: PublicKey | null;
+  state: string;  // 'initialized', 'frozen'
+}
+```
+
+### Token Pool
+
+Compressed tokens use a pool account (omnibus account) to hold SPL tokens:
+
+```typescript
+import { CompressedTokenProgram } from '@lightprotocol/compressed-token';
+
+const poolAccount = CompressedTokenProgram.deriveTokenPoolPda(mint);
+console.log('Pool account:', poolAccount.toBase58());
+```
+
+### Account Selection
+
+When transferring tokens, the SDK automatically selects accounts:
+
+```typescript
+import { selectMinCompressedTokenAccountsForTransfer } from '@lightprotocol/compressed-token';
+
+const tokenAccounts = await rpc.getCompressedTokenAccountsByOwner(
+  owner.publicKey,
+  { mint }
+);
+
+const [selectedAccounts, totalAmount] = 
+  selectMinCompressedTokenAccountsForTransfer(
+    tokenAccounts.items,
+    transferAmount
+  );
+
+if (totalAmount.lt(transferAmount)) {
+  throw new Error('Insufficient balance');
+}
+```
+
+## Token Operations
+
+### Compress SPL Tokens
+
+Convert regular SPL tokens to compressed tokens:
+
+```typescript
+import { compress } from '@lightprotocol/compressed-token';
+import { getOrCreateAssociatedTokenAccount } from '@solana/spl-token';
+
+// First, ensure you have SPL tokens
+const tokenAccount = await getOrCreateAssociatedTokenAccount(
+  rpc,
+  payer,
+  mint,
+  owner.publicKey
+);
+
+// Compress the tokens
+const signature = await compress(
+  rpc,
+  payer,
+  mint,
+  bn(1000_000_000),  // amount to compress
+  owner,
+  tokenAccount.address
+);
+
+console.log('Compressed tokens:', signature);
+```
+
+### Decompress Tokens
+
+Convert compressed tokens back to SPL:
+
+```typescript
+import { decompress } from '@lightprotocol/compressed-token';
+
+const signature = await decompress(
+  rpc,
+  payer,
+  mint,
+  bn(1000_000_000),  // amount to decompress
+  owner,
+  recipient  // Destination for SPL tokens
+);
+
+console.log('Decompressed to SPL:', signature);
+```
+
+### Delegate Tokens
+
+Delegate spending authority:
+
+```typescript
+import { approve } from '@lightprotocol/compressed-token';
+
+const delegate = Keypair.generate().publicKey;
+
+const signature = await approve(
+  rpc,
+  payer,
+  mint,
+  bn(500_000_000),  // delegated amount
+  owner,
+  delegate
+);
+
+console.log('Delegation approved:', signature);
+```
+
+### Transfer Delegated Tokens
+
+Transfer tokens as a delegate:
+
+```typescript
+import { transferDelegated } from '@lightprotocol/compressed-token';
+
+const delegateSigner = Keypair.generate();
+
+const signature = await transferDelegated(
+  rpc,
+  payer,
+  mint,
+  bn(100_000_000),
+  delegateSigner,  // The delegate
+  owner.publicKey, // Token owner
+  recipient
+);
+
+console.log('Delegated transfer:', signature);
+```
+
+### Revoke Delegation
+
+Revoke a delegation:
+
+```typescript
+import { revoke } from '@lightprotocol/compressed-token';
+
+const signature = await revoke(
+  rpc,
+  payer,
+  mint,
+  owner  // Owner revoking delegation
+);
+
+console.log('Delegation revoked:', signature);
+```
+
+## Unified Interface (V2)
+
+The unified interface provides a consistent API for SPL, Token-2022, and compressed tokens:
+
+### Create ATA Interface
+
+Create an associated token account that works with all token types:
+
+```typescript
+import { createAtaInterface } from '@lightprotocol/compressed-token';
+
+const ata = await createAtaInterface(
+  rpc,
+  payer,
+  mint,
+  owner.publicKey
+);
+
+console.log('ATA created:', ata.toBase58());
+```
+
+### Transfer Interface
+
+Transfer tokens using the unified interface:
+
+```typescript
+import {
+  transferInterface,
+  getAssociatedTokenAddressInterface,
+} from '@lightprotocol/compressed-token';
+
+const sourceAta = getAssociatedTokenAddressInterface(
+  mint,
+  owner.publicKey
+);
+
+const signature = await transferInterface(
+  rpc,
+  payer,
+  sourceAta,
+  mint,
+  recipient,
+  owner,
+  bn(100_000_000)
+);
+
+console.log('Interface transfer:', signature);
+```
+
+### Get Account Interface
+
+Query account supporting both hot and cold balances:
+
+```typescript
+import { getAccountInterface } from '@lightprotocol/compressed-token';
+
+const accountInfo = await getAccountInterface(
+  rpc,
+  ata,
+  owner.publicKey,
+  mint
+);
+
+console.log('Total balance:', accountInfo.amount.toString());
+console.log('Hot balance:', accountInfo.hot?.amount.toString());
+console.log('Cold accounts:', accountInfo.cold.length);
+```
+
+### Load Cold Balances
+
+Load compressed balances into the hot ATA for use with standard wallets:
+
+```typescript
+import { loadAta } from '@lightprotocol/compressed-token';
+
+const signature = await loadAta(
+  rpc,
+  ata,
+  owner,
+  mint,
+  payer  // Fee payer
+);
+
+if (signature) {
+  console.log('Loaded cold balance:', signature);
+} else {
+  console.log('No cold balance to load');
+}
+```
+
+## Token Program Support
+
+### SPL Token
+
+```typescript
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+
+const { mint } = await createMint(
+  rpc,
+  payer,
+  mintAuthority.publicKey,
+  9,
+  undefined,
+  undefined,
+  TOKEN_PROGRAM_ID  // SPL Token
+);
+```
+
+### Token-2022
+
+```typescript
+import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+
+const { mint } = await createMint(
+  rpc,
+  payer,
+  mintAuthority.publicKey,
+  9,
+  undefined,
+  undefined,
+  TOKEN_2022_PROGRAM_ID  // Token-2022
+);
+```
+
+### Light Token (V2)
+
+```typescript
+import { LIGHT_TOKEN_PROGRAM_ID } from '@lightprotocol/stateless.js';
+
+const { mint } = await createMintInterface(
+  rpc,
+  payer,
+  mintAuthority,  // Must be Signer
+  null,
+  9,
+  Keypair.generate(),
+  undefined,
+  LIGHT_TOKEN_PROGRAM_ID  // Light Token
+);
+```
+
+## TypeScript Support
+
+Full type definitions for all operations:
+
+```typescript
+import type {
+  ParsedTokenAccount,
+  TokenData,
+  CompressedTokenProgram,
+  AccountInterface,
+  MintInterface,
+  InterfaceOptions,
+} from '@lightprotocol/compressed-token';
+
+const tokenAccount: ParsedTokenAccount = {
+  compressedAccount: {
+    hash: bn('...'),
+    treeInfo: stateTree,
+    leafIndex: 42,
+    owner: owner.publicKey,
+    lamports: bn(0),
+    address: null,
+    data: null,
+  },
+  parsed: {
+    mint: mint,
+    owner: owner.publicKey,
+    amount: bn(1000),
+    delegate: null,
+    state: 'initialized',
+  },
+};
+```
+
+## Browser Support
+
+The package supports both Node.js and browser environments:
+
+```typescript
+// Node.js
+import { createMint } from '@lightprotocol/compressed-token';
+
+// Browser
+import { createMint } from '@lightprotocol/compressed-token/browser';
+```
+
+## Unified Export (V2)
+
+V2 also provides a unified export with all features:
+
+```typescript
+import {
+  createMintInterface,
+  createAtaInterface,
+  transferInterface,
+  getAccountInterface,
+} from '@lightprotocol/compressed-token/unified';
+```
+
+## Best Practices
+
+### Error Handling
+
+```typescript
+try {
+  const signature = await transfer(
+    rpc,
+    payer,
+    mint,
+    amount,
+    owner,
+    recipient
+  );
+} catch (error) {
+  if (error.message.includes('Insufficient balance')) {
+    console.error('Not enough tokens');
+  } else if (error.message.includes('Invalid mint')) {
+    console.error('Mint does not exist');
+  } else {
+    throw error;
+  }
+}
+```
+
+### Transaction Confirmation
+
+```typescript
+import type { ConfirmOptions } from '@solana/web3.js';
+
+const confirmOptions: ConfirmOptions = {
+  commitment: 'confirmed',
+  skipPreflight: false,
+};
+
+const signature = await transfer(
+  rpc,
+  payer,
+  mint,
+  amount,
+  owner,
+  recipient,
+  confirmOptions
+);
+
+await rpc.confirmTransaction(signature, 'finalized');
+```
+
+### Batch Operations
+
+Mint to multiple recipients:
+
+```typescript
+const recipients = [
+  Keypair.generate().publicKey,
+  Keypair.generate().publicKey,
+  Keypair.generate().publicKey,
+];
+
+const amounts = [
+  bn(100_000_000),
+  bn(200_000_000),
+  bn(300_000_000),
+];
+
+const signature = await mintTo(
+  rpc,
+  payer,
+  mint,
+  recipients,  // Array of recipients
+  mintAuthority,
+  amounts      // Array of amounts
+);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Token Operations" icon="coins" href="/sdk/compressed-token/token-operations">
+    Detailed guide to token operations
+  </Card>
+  <Card title="@lightprotocol/stateless.js" icon="cube" href="/sdk/stateless-js/overview">
+    Core SDK for compressed accounts
+  </Card>
+  <Card title="API Reference" icon="book" href="https://js-docs.lightprotocol.com">
+    Full TypeScript API documentation
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/examples">
+    Code examples and tutorials
+  </Card>
+</CardGroup>
+
+## Resources
+
+- [GitHub Repository](https://github.com/Lightprotocol/light-protocol/tree/main/js/compressed-token)
+- [NPM Package](https://www.npmjs.com/package/@lightprotocol/compressed-token)
+- [TypeScript Docs](https://js-docs.lightprotocol.com)

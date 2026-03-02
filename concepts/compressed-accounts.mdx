@@ -1,0 +1,538 @@
+---
+title: "Compressed Accounts"
+description: "Understanding the compressed account model in Light Protocol"
+---
+
+## Compressed Account Model
+
+Light Protocol enforces an account layout that closely resembles Solana's regular account model, making it familiar to Solana developers while enabling massive state compression.
+
+## Account Structure
+
+A compressed account consists of four primary fields:
+
+```rust
+pub struct CompressedAccount {
+    pub owner: Pubkey,              // Program that owns this account
+    pub lamports: u64,               // Account balance in lamports
+    pub address: Option<[u8; 32]>,  // Optional unique address
+    pub data: Option<CompressedAccountData>, // Account data
+}
+
+pub struct CompressedAccountData {
+    pub discriminator: [u8; 8],  // Account type identifier
+    pub data: Vec<u8>,           // Actual account data
+    pub data_hash: [u8; 32],     // Poseidon hash of data
+}
+```
+
+<Info>
+The compressed account layout mirrors Solana's regular accounts (owner, lamports, data), making migration straightforward.
+</Info>
+
+## Key Differences from Regular Accounts
+
+| Property | Regular Account | Compressed Account |
+|----------|----------------|--------------------|
+| **Storage** | On-chain account space | Off-chain (ledger) |
+| **Identifier** | Public key (fixed) | Hash (changes on update) |
+| **Address** | Always 32-byte pubkey | Optional persistent address |
+| **Access** | Direct account load | Proof + hash verification |
+| **Updates** | In-place mutation | Nullify old + create new |
+| **Cost** | Rent ~0.00203 SOL/KB | Near zero |
+
+## Account Identification
+
+### By Hash (All Accounts)
+
+Every compressed account can be identified by its hash, computed as:
+
+```
+H(owner || leaf_index || merkle_tree_pubkey || lamports || address || discriminator || data_hash)
+```
+
+**Important**: The hash changes whenever any field changes, including updates to data or lamports.
+
+### By Address (Optional)
+
+Accounts can optionally have a persistent 32-byte address that doesn't change across updates.
+
+**Use Cases:**
+- Compressed PDAs (Program Derived Addresses)
+- Token accounts (mint + owner derivation)
+- User profiles and identifiers
+- Any account requiring stable reference
+
+**When to Skip:**
+- Fungible tokens (no unique identifier needed)
+- Ephemeral accounts
+- High-throughput applications (reduces overhead)
+
+<Note>
+Addresses incur additional computational overhead for uniqueness verification. Only use when persistent identity is required.
+</Note>
+
+## Compressed PDA Accounts
+
+Compressed PDAs work similarly to regular Solana PDAs:
+
+- Derived from seeds and program ID
+- Not controlled by a private key
+- Ownership verified via derivation, not signature
+- Unique across the address space
+
+### PDA Derivation
+
+```rust
+// Derive compressed PDA address
+let seeds = &[
+    b"user-profile",
+    user_pubkey.as_ref(),
+];
+
+let (address, bump) = Pubkey::find_program_address(
+    seeds,
+    program_id,
+);
+
+// Create compressed account with this address
+let compressed_account = CompressedAccount {
+    owner: *program_id,
+    lamports: 1000,
+    address: Some(address.to_bytes()),
+    data: Some(user_data),
+};
+```
+
+### Address Verification
+
+Creating a new compressed address requires:
+
+1. **Non-inclusion proof**: Prove the address doesn't already exist
+2. **Address tree insertion**: Add address to indexed Merkle tree
+3. **Address queue**: Buffer addresses before tree update
+
+```rust
+#[derive(Accounts)]
+pub struct CreateCompressedPDA<'info> {
+    /// State merkle tree for account hash
+    pub state_tree: AccountLoader<'info, MerkleTree>,
+    
+    /// Address tree for uniqueness
+    pub address_tree: AccountLoader<'info, AddressTree>,
+    
+    /// Address queue
+    pub address_queue: AccountLoader<'info, Queue>,
+}
+```
+
+## Account Data Layout
+
+### Discriminator
+
+The first 8 bytes of account data serve as a discriminator, similar to Anchor accounts:
+
+```rust
+pub struct CompressedAccountData {
+    pub discriminator: [u8; 8],  // Identifies account type
+    pub data: Vec<u8>,           // Your custom data
+    pub data_hash: [u8; 32],     // Hash of discriminator + data
+}
+```
+
+**Purpose:**
+- Distinguish between different account types
+- Enable type-safe deserialization
+- Compatible with Anchor discriminators
+
+**Calculation:**
+```rust
+// Anchor-style discriminator
+use anchor_lang::Discriminator;
+
+#[account]
+pub struct UserProfile {
+    pub name: String,
+    pub age: u8,
+}
+
+// Discriminator is SHA256("account:UserProfile")[..8]
+let discriminator = UserProfile::DISCRIMINATOR;
+```
+
+### Data Hash
+
+The data hash is critical for integrity:
+
+```rust
+// Hash computation
+let data_with_discriminator = [
+    discriminator.as_slice(),
+    data.as_slice(),
+].concat();
+
+let data_hash = Poseidon::hash(&data_with_discriminator)?;
+```
+
+**Properties:**
+- Verifies data integrity
+- Enables off-chain data storage
+- Required for compressed account hash computation
+- Computed by program, verified by Light system program
+
+<Accordion title="Why Use a Data Hash?">
+The data hash enables Light Protocol to be agnostic about how data is stored:
+
+1. **Flexibility**: Programs can store data in any format (compressed, encrypted, etc.)
+2. **Integrity**: On-chain verification without needing full data
+3. **Efficiency**: Only hash needs to be in Merkle tree
+4. **Privacy**: Potential for private data with public commitments
+
+The account owner program is responsible for ensuring the data hash is correct.
+</Accordion>
+
+## Fungible vs Non-Fungible Accounts
+
+### Fungible Accounts (No Address)
+
+Tokens and other fungible assets don't need addresses:
+
+```rust
+pub struct CompressedTokenAccount {
+    pub owner: Pubkey,     // Token holder
+    pub lamports: u64,
+    pub address: None,     // No address needed
+    pub data: CompressedAccountData {
+        discriminator: TOKEN_ACCOUNT_DISCRIMINATOR,
+        data: serialize(&TokenAccountData {
+            mint: token_mint,
+            amount: 1000,
+            delegate: None,
+            state: AccountState::Initialized,
+        }),
+        data_hash: hash_of_data,
+    },
+}
+```
+
+**Benefits:**
+- Lower computational overhead
+- No address tree interaction
+- Faster account creation
+- Identified by hash alone
+
+### Non-Fungible Accounts (With Address)
+
+Unique identifiers require persistent addresses:
+
+```rust
+pub struct CompressedNFTAccount {
+    pub owner: Pubkey,
+    pub lamports: u64,
+    pub address: Some(nft_mint_address), // Unique identifier
+    pub data: CompressedAccountData {
+        discriminator: NFT_DISCRIMINATOR,
+        data: nft_metadata,
+        data_hash: hash_of_metadata,
+    },
+}
+```
+
+## Account Lifecycle
+
+### Creation
+
+1. Program creates account data structure
+2. Computes account hash
+3. Inserts hash into output queue
+4. (Optional) Inserts address into address queue
+5. Forester batches and updates trees
+6. Account becomes readable from indexer
+
+```rust
+// Example: Create compressed account
+let account = CompressedAccount {
+    owner: *program_id,
+    lamports: 1_000_000,
+    address: Some(user_address),
+    data: Some(user_data),
+};
+
+// System program handles insertion
+light_system::cpi::create_compressed_account(
+    ctx,
+    account,
+    merkle_tree_index,
+    address_params,
+)?;
+```
+
+### Reading
+
+1. Query indexer for account by hash or address
+2. Indexer returns account data + Merkle proof
+3. Verify proof against on-chain root (optional but recommended)
+4. Use account data in program logic
+
+```typescript
+// Fetch compressed account
+const account = await rpc.getCompressedAccount(accountHash);
+
+// Verify proof
+const isValid = await verifyMerkleProof(
+  account.hash,
+  account.merkleProof,
+  onChainRoot
+);
+```
+
+### Updating
+
+1. Fetch current account + proof from indexer
+2. Verify inclusion proof in transaction
+3. Nullify old account hash (input queue)
+4. Create new account with updated data (output queue)
+5. Foresters update trees with nullification and insertion
+
+```rust
+// Update compressed account
+pub fn update_user_profile(
+    ctx: Context<UpdateProfile>,
+    new_name: String,
+) -> Result<()> {
+    // Old account verified via proof
+    let old_account = &ctx.accounts.old_account;
+    
+    // Create new account with updated data
+    let new_account = CompressedAccount {
+        owner: old_account.owner,
+        lamports: old_account.lamports,
+        address: old_account.address, // Same address
+        data: Some(CompressedAccountData {
+            discriminator: old_account.discriminator,
+            data: serialize(&UserProfile {
+                name: new_name,
+                age: old_account.age,
+            }),
+            data_hash: computed_hash,
+        }),
+    };
+    
+    // System program nullifies old, inserts new
+    light_system::cpi::update_compressed_account(
+        ctx,
+        old_account,
+        new_account,
+    )?;
+}
+```
+
+### Closing
+
+1. Verify ownership/authority
+2. Nullify account hash
+3. Transfer lamports to destination
+4. Account becomes unreadable (hash nullified)
+
+```rust
+pub fn close_account(
+    ctx: Context<CloseAccount>,
+) -> Result<()> {
+    let account = &ctx.accounts.account;
+    
+    // Transfer lamports
+    let lamports = account.lamports;
+    
+    // Nullify account (no new account created)
+    light_system::cpi::close_compressed_account(
+        ctx,
+        account,
+        lamports,
+    )?;
+}
+```
+
+## Merkle Context
+
+Every compressed account operation requires Merkle context:
+
+```rust
+pub struct MerkleContext {
+    pub merkle_tree_pubkey: Pubkey,  // Which tree stores this account
+    pub queue_pubkey: Pubkey,         // Associated queue
+    pub leaf_index: u32,              // Position in tree (if known)
+    pub prove_by_index: bool,         // Use index or ZK proof
+    pub tree_type: TreeType,          // State or Address tree
+}
+```
+
+### Proof Methods
+
+**Proof by Index** (Fast, limited window):
+- Used when account is in output queue but not yet in tree
+- O(1) lookup in value array
+- Only available until tree is updated
+- Fails if account already nullified
+
+**Proof by Merkle** (Always works):
+- Used once account is in tree
+- Requires ZK proof of inclusion
+- Works for any historical state
+- More expensive (proof verification cost)
+
+## Compressed Token Accounts
+
+Light Protocol provides a complete compressed token implementation:
+
+```rust
+pub struct TokenAccount {
+    pub mint: Pubkey,              // Token mint
+    pub owner: Pubkey,              // Token owner
+    pub amount: u64,                // Token balance
+    pub delegate: Option<Pubkey>,   // Optional delegate
+    pub state: AccountState,        // Initialized, Frozen, etc.
+    pub is_native: Option<u64>,     // Wrapped SOL amount
+    pub delegated_amount: u64,      // Amount delegated
+    pub close_authority: Option<Pubkey>, // Can close account
+}
+```
+
+**SPL Compatibility:**
+- Compatible with SPL Token interface
+- Can compress/decompress SPL tokens
+- Supports token-2022 extensions (partial)
+- Maintains same security guarantees
+
+## Account Hash Computation
+
+The complete compressed account hash formula:
+
+```rust
+pub fn hash_compressed_account(
+    owner: &Pubkey,
+    leaf_index: u32,
+    merkle_tree_pubkey: &Pubkey,
+    lamports: u64,
+    address: Option<&[u8; 32]>,
+    discriminator: &[u8; 8],
+    data_hash: &[u8; 32],
+) -> Result<[u8; 32]> {
+    let mut inputs = vec![];
+    
+    // 1. Owner (hashed to field size)
+    inputs.push(hash_to_bn254_field_size(owner));
+    
+    // 2. Leaf index (4 bytes, big-endian)
+    inputs.push(leaf_index.to_be_bytes());
+    
+    // 3. Merkle tree pubkey (hashed)
+    inputs.push(hash_to_bn254_field_size(merkle_tree_pubkey));
+    
+    // 4. Lamports (if non-zero, domain-separated)
+    if lamports != 0 {
+        let mut lamport_bytes = [0u8; 32];
+        lamport_bytes[23] = 1; // Domain separator
+        lamport_bytes[24..].copy_from_slice(&lamports.to_be_bytes());
+        inputs.push(lamport_bytes);
+    }
+    
+    // 5. Address (if present)
+    if let Some(addr) = address {
+        inputs.push(*addr);
+    }
+    
+    // 6. Discriminator (domain-separated)
+    let mut disc_bytes = [0u8; 32];
+    disc_bytes[23] = 2; // Domain separator
+    disc_bytes[24..].copy_from_slice(discriminator);
+    inputs.push(disc_bytes);
+    
+    // 7. Data hash
+    inputs.push(*data_hash);
+    
+    // Hash all inputs
+    Poseidon::hashv(&inputs)
+}
+```
+
+<Note>
+The leaf index and merkle tree pubkey ensure every compressed account hash is globally unique, even if all other fields are identical.
+</Note>
+
+## Best Practices
+
+### Use Addresses Sparingly
+
+```rust
+// Good: Fungible token (no address needed)
+CompressedAccount {
+    owner: user,
+    lamports: 0,
+    address: None,  // ✅ No address
+    data: token_data,
+}
+
+// Good: NFT (needs persistent identifier)
+CompressedAccount {
+    owner: user,
+    lamports: 0,
+    address: Some(nft_mint),  // ✅ Address required
+    data: nft_metadata,
+}
+```
+
+### Minimize Data Size
+
+```rust
+// Efficient: Only store necessary data
+#[account]
+pub struct UserProfile {
+    pub name: [u8; 32],  // Fixed size
+    pub age: u8,
+    pub score: u32,
+}
+// Size: 37 bytes
+
+// Inefficient: Large variable data
+#[account]
+pub struct UserProfile {
+    pub name: String,     // Variable size
+    pub bio: String,      // Could be huge
+    pub image_url: String,
+}
+// Size: Unbounded
+```
+
+### Batch Operations
+
+```rust
+// Efficient: Batch multiple updates
+pub fn batch_transfer(
+    ctx: Context<BatchTransfer>,
+    recipients: Vec<Pubkey>,
+    amounts: Vec<u64>,
+) -> Result<()> {
+    for (recipient, amount) in recipients.iter().zip(amounts.iter()) {
+        // All updates go into same output queue
+        transfer_compressed(ctx, *recipient, *amount)?;
+    }
+    Ok(())
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Merkle Trees" icon="tree" href="/concepts/merkle-trees">
+    Learn about Merkle tree structures
+  </Card>
+  <Card title="State Trees" icon="database" href="/concepts/state-trees">
+    Explore state tree management
+  </Card>
+  <Card title="Build a Program" icon="code" href="/guides/custom-programs">
+    Create your first compressed account program
+  </Card>
+  <Card title="Token Program" icon="coins" href="/programs/compressed-token">
+    Learn about compressed tokens
+  </Card>
+</CardGroup>

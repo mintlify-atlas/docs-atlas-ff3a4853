@@ -1,0 +1,449 @@
+---
+title: "account-checks"
+description: "Solana account validation for both solana-program and pinocchio SDKs"
+icon: "shield-check"
+---
+
+## Overview
+
+The `light-account-checks` crate provides unified account validation for Light Protocol programs. It offers a consistent API across both `solana-program` and `pinocchio` SDKs through trait abstraction.
+
+**Crate:** `light-account-checks`  
+**Location:** `program-libs/account-checks/`  
+**Error Codes:** 12006-12021
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="SDK Abstraction" icon="layer-group">
+    Single codebase works with both Solana and Pinocchio account types
+  </Card>
+  <Card title="Type Safety" icon="lock">
+    8-byte discriminators ensure correct account types
+  </Card>
+  <Card title="Rich Errors" icon="triangle-exclamation">
+    Detailed error messages with file:line:column locations
+  </Card>
+  <Card title="Zero Cost" icon="zap">
+    No runtime overhead from abstraction
+  </Card>
+</CardGroup>
+
+## Core Types
+
+### AccountInfoTrait
+
+Trait abstraction over account info types:
+
+```rust
+pub trait AccountInfoTrait {
+    fn key(&self) -> &[u8; 32];
+    fn is_signer(&self) -> bool;
+    fn is_writable(&self) -> bool;
+    fn lamports(&self) -> u64;
+    fn data_len(&self) -> usize;
+    fn owner(&self) -> &[u8; 32];
+    fn try_borrow_data(&self) -> Result<Ref<[u8]>, BorrowError>;
+    fn try_borrow_mut_data(&self) -> Result<RefMut<[u8]>, BorrowError>;
+    
+    // PDA derivation
+    fn find_program_address(
+        seeds: &[&[u8]],
+        program_id: &[u8; 32]
+    ) -> ([u8; 32], u8);
+}
+```
+
+**Implementations:**
+- `solana_program::account_info::AccountInfo` (feature: `solana`)
+- `pinocchio::account_info::AccountInfo` (feature: `pinocchio`)
+- `TestAccountInfo` (feature: `test-only`)
+
+### AccountIterator
+
+Enhanced iterator with error location tracking:
+
+```rust
+let mut iter = AccountIterator::new(accounts);
+
+// Get next account with validation
+let authority = iter.next_signer()?;
+let state = iter.next_mut()?;
+let readonly = iter.next_non_mut()?;
+
+// Optional accounts
+let delegate = iter.next_option()?;
+```
+
+**Error messages include:**
+```
+Error: Expected writable account at index 2
+  at program.rs:47:23
+```
+
+## Validation Functions
+
+### Ownership Checks
+
+<Accordion title="check_owner">
+  Verifies account is owned by expected program.
+  
+  ```rust
+  pub fn check_owner<A: AccountInfoTrait>(
+      expected_owner: &[u8; 32],
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** Verify account belongs to your program before reading/writing.
+</Accordion>
+
+<Accordion title="check_program">
+  Checks if account is a program account (executable).
+  
+  ```rust
+  pub fn check_program<A: AccountInfoTrait>(
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** Validate CPI targets are executable programs.
+</Accordion>
+
+### Permission Checks
+
+<Accordion title="check_signer">
+  Verifies account signed the transaction.
+  
+  ```rust
+  pub fn check_signer<A: AccountInfoTrait>(
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** Ensure authority accounts have valid signatures.
+</Accordion>
+
+<Accordion title="check_mut / check_non_mut">
+  Verifies mutability matches expectation.
+  
+  ```rust
+  pub fn check_mut<A: AccountInfoTrait>(
+      account: &A,
+  ) -> Result<(), AccountError>
+  
+  pub fn check_non_mut<A: AccountInfoTrait>(
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** Prevent accidental writes to readonly accounts.
+</Accordion>
+
+### Discriminator Validation
+
+<Accordion title="check_discriminator">
+  Validates account type via 8-byte prefix.
+  
+  ```rust
+  pub fn check_discriminator<T: Discriminator>(
+      bytes: &[u8],
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Example:**
+  ```rust
+  use light_batched_merkle_tree::merkle_tree::BatchedMerkleTreeAccount;
+  
+  check_discriminator::<BatchedMerkleTreeAccount>(&account_data)?;
+  ```
+</Accordion>
+
+<Accordion title="set_discriminator">
+  Initializes account with type discriminator.
+  
+  ```rust
+  pub fn set_discriminator<T: Discriminator>(
+      bytes: &mut [u8],
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** Called once during account initialization.
+</Accordion>
+
+### PDA Validation
+
+<Accordion title="check_pda_seeds">
+  Verifies PDA derivation and finds bump seed.
+  
+  ```rust
+  pub fn check_pda_seeds<A: AccountInfoTrait>(
+      account: &A,
+      seeds: &[&[u8]],
+      program_id: &[u8; 32],
+  ) -> Result<u8, AccountError>
+  ```
+  
+  **Returns:** Canonical bump seed
+  
+  **Example:**
+  ```rust
+  let bump = check_pda_seeds(
+      config_account,
+      &[b"config", mint.key()],
+      &program_id,
+  )?;
+  ```
+</Accordion>
+
+<Accordion title="check_pda_seeds_with_bump">
+  Verifies PDA with known bump seed.
+  
+  ```rust
+  pub fn check_pda_seeds_with_bump<A: AccountInfoTrait>(
+      account: &A,
+      seeds: &[&[u8]],
+      bump: &[u8],
+      program_id: &[u8; 32],
+  ) -> Result<(), AccountError>
+  ```
+  
+  **Use case:** When bump is stored in account data.
+</Accordion>
+
+### Rent Exemption
+
+<Accordion title="check_account_balance_is_rent_exempt">
+  Validates account has sufficient lamports for rent exemption.
+  
+  ```rust
+  pub fn check_account_balance_is_rent_exempt<A: AccountInfoTrait>(
+      account: &A,
+      expected_size: usize,
+  ) -> Result<u64, AccountError>
+  ```
+  
+  **Returns:** Rent-exempt balance for the size
+</Accordion>
+
+### Combined Validators
+
+<Accordion title="check_account_info_mut">
+  Combined validation: writable + owned + discriminator.
+  
+  ```rust
+  pub fn check_account_info_mut<T: Discriminator, A: AccountInfoTrait>(
+      program_id: &[u8; 32],
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+</Accordion>
+
+<Accordion title="check_account_info_non_mut">
+  Combined validation: readonly + owned + discriminator.
+  
+  ```rust
+  pub fn check_account_info_non_mut<T: Discriminator, A: AccountInfoTrait>(
+      program_id: &[u8; 32],
+      account: &A,
+  ) -> Result<(), AccountError>
+  ```
+</Accordion>
+
+## Error Codes
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 12006 | `InvalidDiscriminator` | Account type mismatch |
+| 12007 | `OwnerMismatch` | Account owned by wrong program |
+| 12008 | `AccountNotSigner` | Required signer missing |
+| 12009 | `AccountMutable` | Account is writable when readonly expected |
+| 12010 | `InvalidAccountSize` | Account data too small |
+| 12011 | `AccountImmutable` | Account is readonly when writable expected |
+| 12012 | `AlreadyInitialized` | Account already has discriminator |
+| 12013 | `SignerCheckFailed` | Authority signature validation failed |
+| 12014 | `InvalidPda` | PDA derivation doesn't match |
+| 12015 | `InvalidBump` | Invalid bump seed for PDA |
+| 12016 | `BorrowAccountDataFailed` | Failed to borrow account data |
+| 12017 | `BorrowAccountDataMutFailed` | Failed to mutably borrow account data |
+| 12018 | `NotRentExempt` | Account balance below rent exemption |
+| 12019 | `AccountNotInitialized` | Account discriminator is zero |
+| 12020 | `InvalidProgramExecutable` | Account is not executable |
+| 12021 | `InvalidAccountIndex` | Index out of bounds |
+
+## Usage Patterns
+
+### Basic Validation
+
+```rust
+use light_account_checks::{
+    checks::*,
+    AccountInfoTrait,
+    AccountError,
+};
+
+pub fn process(
+    program_id: &[u8; 32],
+    accounts: &[AccountInfo],
+) -> Result<(), AccountError> {
+    let [authority, state, readonly] = accounts else {
+        return Err(AccountError::InvalidAccountIndex);
+    };
+    
+    // Validate authority
+    check_signer(authority)?;
+    
+    // Validate state account
+    check_account_info_mut::<StateAccount>(
+        program_id,
+        state,
+    )?;
+    
+    // Validate readonly
+    check_non_mut(readonly)?;
+    
+    Ok(())
+}
+```
+
+### With AccountIterator
+
+```rust
+use light_account_checks::{
+    AccountIterator,
+    checks::*,
+};
+
+pub fn process(accounts: &[AccountInfo]) -> Result<(), AccountError> {
+    let mut iter = AccountIterator::new(accounts);
+    
+    let authority = iter.next_signer()?;
+    let state = iter.next_mut()?;
+    let mint = iter.next_non_mut()?;
+    let delegate = iter.next_option()?;  // Optional
+    
+    // Validate types
+    check_discriminator::<StateAccount>(
+        &state.try_borrow_data()?
+    )?;
+    
+    Ok(())
+}
+```
+
+### PDA Validation
+
+```rust
+use light_account_checks::checks::*;
+
+// Validate and get bump
+let seeds = &[b"config", mint_pubkey.as_ref()];
+let bump = check_pda_seeds(
+    config_account,
+    seeds,
+    &program_id,
+)?;
+
+// Store bump for future use
+config.bump = bump;
+
+// Later: validate with known bump
+check_pda_seeds_with_bump(
+    config_account,
+    seeds,
+    &[bump],
+    &program_id,
+)?;
+```
+
+### Custom Account Types
+
+```rust
+use light_account_checks::discriminator::Discriminator;
+
+#[repr(C)]
+pub struct MyAccount {
+    pub discriminator: [u8; 8],
+    pub data: u64,
+}
+
+impl Discriminator for MyAccount {
+    const LIGHT_DISCRIMINATOR: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+}
+
+// Now use with validation functions
+check_discriminator::<MyAccount>(&account_data)?;
+```
+
+## Feature Flags
+
+<ParamField path="solana" type="feature">
+  Enables `solana-program::account_info::AccountInfo` implementation
+</ParamField>
+
+<ParamField path="pinocchio" type="feature">
+  Enables `pinocchio::account_info::AccountInfo` implementation
+</ParamField>
+
+<ParamField path="test-only" type="feature">
+  Enables `TestAccountInfo` mock implementation for unit tests
+</ParamField>
+
+<ParamField path="msg" type="feature">
+  Enables detailed error messages with `solana_msg::msg!()`
+</ParamField>
+
+## Testing
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use light_account_checks::{
+        account_info::test_account_info::TestAccountInfo,
+        checks::*,
+    };
+    
+    #[test]
+    fn test_owner_check() {
+        let program_id = [1u8; 32];
+        let account = TestAccountInfo {
+            owner: program_id,
+            ..Default::default()
+        };
+        
+        assert!(check_owner(&program_id, &account).is_ok());
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Validate Early">
+    Perform all account validation at the start of instruction processing, before any state changes.
+  </Accordion>
+  
+  <Accordion title="Use Combined Validators">
+    Prefer `check_account_info_mut` and `check_account_info_non_mut` for common validation patterns.
+  </Accordion>
+  
+  <Accordion title="Leverage AccountIterator">
+    Use `AccountIterator` for cleaner code with better error messages including source locations.
+  </Accordion>
+  
+  <Accordion title="Define Discriminators as Constants">
+    Always use constant discriminators to catch type mismatches at compile time.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Source Code" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/account-checks">
+    View on GitHub
+  </Card>
+  <Card title="API Docs" icon="book" href="https://docs.rs/light-account-checks">
+    Rust documentation
+  </Card>
+</CardGroup>

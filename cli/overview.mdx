@@ -1,0 +1,183 @@
+---
+title: 'CLI Overview'
+description: 'Command-line interface for interacting with ZK Compression on Solana'
+---
+
+# ZK Compression CLI
+
+The Light Protocol CLI (`light`) is a command-line interface for interacting with compressed accounts and compressed tokens on Solana. It provides a complete toolkit for local development, testing, and production operations.
+
+## Installation
+
+### Using npm
+
+Install the CLI globally using npm or your preferred package manager:
+
+```bash
+npm install -g @lightprotocol/zk-compression-cli
+```
+
+<Info>
+Requires Node.js >= v20.9.0
+</Info>
+
+### Building from Source
+
+If you prefer to build from source, follow these steps at the root of the monorepo:
+
+```bash
+# Activate the development environment
+. ./scripts/devenv
+
+# Install and build the monorepo
+./scripts/install.sh
+./scripts/build.sh
+
+# Make CLI globally available
+pnpm link --global
+
+# Verify installation
+which light
+```
+
+## Prerequisites
+
+You need a valid Solana filesystem wallet for the CLI to function:
+
+- **Default wallet location**: `~/.config/solana/id.json`
+- The CLI uses this wallet as the default fee payer and mint authority
+- Create one by following the [Solana wallet documentation](https://docs.solanalabs.com/cli/wallets/file-system)
+
+## Quick Start
+
+### 1. Start the Test Environment
+
+The CLI includes a complete local test environment with validator, indexer, and prover:
+
+```bash
+light test-validator
+```
+
+This starts:
+- Solana test validator with Light Protocol programs
+- Photon indexer (port 8784)
+- Light prover server (port 3001)
+
+<Tip>
+Use `--skip-indexer` or `--skip-prover` flags to run without specific services.
+</Tip>
+
+### 2. Fund Your Wallet
+
+Ensure you have sufficient localnet SOL:
+
+```bash
+solana airdrop 1
+solana balance
+```
+
+### 3. Run CLI Commands
+
+You're ready to interact with ZK Compression:
+
+<CodeGroup>
+
+```bash Create Mint
+light create-mint
+```
+
+```bash Mint Tokens
+light mint-to --mint <MINT_ADDRESS> --to <WALLET_ADDRESS> --amount 1000000000
+```
+
+```bash Transfer
+light transfer --mint <MINT_ADDRESS> --to <RECIPIENT> --amount 1000000
+```
+
+```bash Compress SOL
+light compress-sol --to <ADDRESS> --amount 100000
+```
+
+</CodeGroup>
+
+## Configuration
+
+View or update CLI configuration for different networks:
+
+```bash
+# View current configuration
+light config --get
+```
+
+### Using Devnet
+
+To switch to Devnet with an RPC that supports ZK Compression:
+
+```bash
+light config \
+  --indexerUrl "https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>" \
+  --proverUrl "https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>" \
+  --solanaRpcUrl "https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
+
+# Also update Solana CLI
+solana config set --url "https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
+solana airdrop 1
+```
+
+## Command Categories
+
+The CLI organizes commands into logical groups:
+
+### Development & Testing
+
+- `test-validator` - Local test environment with validator, indexer, and prover
+- `start-prover` - Run standalone prover server
+- `config` - Configure RPC endpoints
+
+### Token Operations
+
+- `create-mint` - Create compressed token mints
+- `mint-to` - Mint tokens to accounts
+- `approve-and-mint-to` - Mint via external authority
+- `transfer` - Transfer compressed tokens
+- `create-token-pool` - Register existing mints
+
+### Compression
+
+- `compress-sol` - Compress native SOL
+- `decompress-sol` - Decompress back to native SOL
+- `compress-spl` - Compress SPL tokens
+- `decompress-spl` - Decompress SPL tokens
+
+### Account Management
+
+- `balance` - Check compressed SOL balance
+- `token-balance` - Check compressed token balance
+- `merge-token-accounts` - Consolidate token accounts
+
+## Getting Help
+
+All commands support the `--help` flag for detailed usage:
+
+```bash
+light --help
+light test-validator --help
+light transfer --help
+```
+
+## Support
+
+- Join the [Developer Discord](https://discord.gg/D2cEphnvcY) for help
+- Check the [Photon indexer](https://github.com/helius-labs/photon) documentation
+- Visit [Light Protocol docs](https://docs.lightprotocol.com/)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Test Validator" icon="server" href="/cli/test-validator">
+    Learn about the local development environment
+  </Card>
+  <Card title="All Commands" icon="terminal" href="/cli/commands">
+    Complete command reference with examples
+  </Card>
+</CardGroup>

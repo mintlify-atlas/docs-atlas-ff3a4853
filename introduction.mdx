@@ -1,0 +1,169 @@
+---
+title: "Welcome to Light Protocol"
+description: "The ZK Compression Protocol for Solana - Build rent-free applications with zero-knowledge compression"
+icon: "bolt"
+---
+
+<img
+  className="block dark:hidden"
+  src="https://raw.githubusercontent.com/Lightprotocol/light-protocol/main/assets/logo.svg"
+  alt="Light Protocol"
+/>
+<img
+  className="hidden dark:block"
+  src="https://raw.githubusercontent.com/Lightprotocol/light-protocol/main/assets/logo.svg"
+  alt="Light Protocol"
+/>
+
+## What is Light Protocol?
+
+Light Protocol brings **ZK Compression** to Solana, enabling developers to create rent-free tokens and Program Derived Accounts (PDAs) without sacrificing performance, security, or composability.
+
+By storing account state in Merkle trees and keeping only small fingerprints on-chain, Light Protocol reduces storage costs by orders of magnitude while maintaining the full security and performance of Solana L1.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Rent-Free State" icon="coins" href="/concepts/zk-compression">
+    Compress account state to reduce costs by 1000x while maintaining Solana's security
+  </Card>
+  <Card title="Compressed Tokens" icon="wallet" href="/guides/compressed-tokens">
+    SPL Token compatible compressed tokens with full Token-2022 extension support
+  </Card>
+  <Card title="Compressed PDAs" icon="cube" href="/guides/compressed-pdas">
+    Build custom programs with program-derived compressed accounts
+  </Card>
+  <Card title="Zero-Knowledge Proofs" icon="shield-check" href="/concepts/architecture">
+    Groth16 SNARKs provide succinct validity proofs for state transitions
+  </Card>
+</CardGroup>
+
+## How It Works
+
+When a Solana account gets compressed with Light Protocol:
+
+1. **Hash & Store**: Account data is hashed and stored as a leaf in a sparse Merkle tree
+2. **On-Chain Root**: Only the tree's state root (a small fingerprint) is stored on-chain
+3. **Off-Chain Data**: The actual compressed data is stored off-chain in the cheaper Solana ledger space
+4. **ZK Proofs**: Transactions provide zero-knowledge proofs to verify data integrity
+
+This approach combines the best of both worlds: **Solana's performance** with **orders of magnitude lower costs**.
+
+<Note>
+  Light Protocol is a set of smart contracts on Solana - it's not an L2 or separate chain. Your compressed accounts maintain full Solana L1 security guarantees.
+</Note>
+
+## Cost Comparison
+
+<CardGroup cols={3}>
+  <Card title="Regular Solana Account" icon="dollar-sign">
+    **~0.0035 SOL** per account (~$0.70 at $200/SOL)
+  </Card>
+  <Card title="Compressed Account" icon="circle-dollar">
+    **~0.000005 SOL** calldata cost (~$0.001)
+  </Card>
+  <Card title="Savings" icon="chart-line">
+    **~99.8% reduction** in storage costs
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<Steps>
+  <Step title="Install Dependencies">
+    Set up your development environment with the Light Protocol CLI and SDKs
+    
+    ```bash
+    npm install -g @lightprotocol/zk-compression-cli
+    ```
+  </Step>
+  
+  <Step title="Run Test Validator">
+    Start a local Solana test validator with Light Protocol programs
+    
+    ```bash
+    light test-validator
+    ```
+  </Step>
+  
+  <Step title="Build Your First App">
+    Create compressed tokens or PDAs using our TypeScript or Rust SDKs
+    
+    ```typescript
+    import { Rpc, compress } from '@lightprotocol/stateless.js';
+    
+    const rpc = await Rpc.createTestnetRpc();
+    // Start building with compressed accounts
+    ```
+  </Step>
+</Steps>
+
+<Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+  Follow our quickstart to build your first compressed token application in 5 minutes →
+</Card>
+
+## Architecture
+
+Light Protocol consists of several key components:
+
+<AccordionGroup>
+  <Accordion title="On-Chain Programs" icon="layer-group">
+    - **Account Compression Program**: Manages Merkle tree accounts and proof verification
+    - **Light System Program**: Validates compressed account state transitions
+    - **Compressed Token Program**: SPL Token compatible compressed tokens
+    - **Registry Program**: Protocol configuration and forester coordination
+  </Accordion>
+  
+  <Accordion title="Off-Chain Infrastructure" icon="server">
+    - **Photon Indexer**: Indexes and stores compressed account state
+    - **ZK Prover**: Generates Groth16 proofs for state transitions
+    - **Forester Nodes**: Asynchronously process queues and update trees
+  </Accordion>
+  
+  <Accordion title="Developer Tools" icon="code">
+    - **TypeScript SDK**: `@lightprotocol/stateless.js` and `@lightprotocol/compressed-token`
+    - **Rust SDK**: `light-sdk`, `light-client`, and `light-token`
+    - **CLI Tool**: Local development and testing with `light` command
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+Light Protocol is ideal for applications that need to scale to millions of users:
+
+- **Social Networks**: Store user profiles and posts without rent burden
+- **Gaming**: Manage in-game assets and inventory at scale
+- **DeFi**: Create liquidity pools and trading accounts efficiently
+- **NFT Platforms**: Mint and manage large NFT collections
+- **Payments**: Build payment systems with minimal transaction costs
+
+## Community & Support
+
+<CardGroup cols={3}>
+  <Card title="Discord" icon="discord" href="https://discord.gg/WDAAaX6je2">
+    Join our community
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/Lightprotocol/light-protocol">
+    Contribute to the protocol
+  </Card>
+  <Card title="Twitter" icon="x-twitter" href="https://x.com/lightprotocol">
+    Follow for updates
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first compressed token app
+  </Card>
+  <Card title="Core Concepts" icon="book-open" href="/concepts/zk-compression">
+    Learn how ZK Compression works
+  </Card>
+  <Card title="JavaScript SDK" icon="js" href="/sdk/stateless-js/overview">
+    Explore the TypeScript/JavaScript SDK
+  </Card>
+  <Card title="Rust SDK" icon="rust" href="/sdk/rust/overview">
+    Integrate Light into Solana programs
+  </Card>
+</CardGroup>

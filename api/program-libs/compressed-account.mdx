@@ -1,0 +1,461 @@
+---
+title: "compressed-account"
+description: "Core compressed account types and utilities for Light Protocol"
+icon: "box-archive"
+---
+
+## Overview
+
+The `light-compressed-account` crate provides the core compressed account struct and utility types for Light Protocol. It defines the fundamental data structures used throughout the protocol for state compression.
+
+**Crate:** `light-compressed-account`  
+**Location:** `program-libs/compressed-account/`  
+**Error Codes:** 12001-12025
+
+## Key Types
+
+<CardGroup cols={2}>
+  <Card title="CompressedAccount" icon="box">
+    Core struct representing compressed state
+  </Card>
+  <Card title="Address" icon="at">
+    Deterministic address derivation
+  </Card>
+  <Card title="Nullifier" icon="ban">
+    Spend tracking for compressed accounts
+  </Card>
+  <Card title="Instruction Data" icon="code">
+    ZK proof structures and CPI contexts
+  </Card>
+</CardGroup>
+
+## CompressedAccount
+
+### Structure
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompressedAccount {
+    pub owner: [u8; 32],
+    pub lamports: u64,
+    pub address: Option<[u8; 32]>,
+    pub data: Option<CompressedAccountData>,
+}
+
+pub struct CompressedAccountData {
+    pub discriminator: [u8; 8],
+    pub data: Vec<u8>,
+    pub data_hash: [u8; 32],
+}
+```
+
+### Fields
+
+<ResponseField name="owner" type="[u8; 32]" required>
+  Program that owns this compressed account (similar to Solana account owner)
+</ResponseField>
+
+<ResponseField name="lamports" type="u64" required>
+  Lamport balance stored in this account
+</ResponseField>
+
+<ResponseField name="address" type="Option<[u8; 32]>">
+  Optional deterministic address. Required for accounts with data. Derived from seeds using `derive_address()`.
+</ResponseField>
+
+<ResponseField name="data" type="Option<CompressedAccountData>">
+  Optional account data:
+  - `discriminator`: 8-byte type identifier
+  - `data`: Raw account data (variable length)
+  - `data_hash`: Poseidon hash of `discriminator || data`
+</ResponseField>
+
+### Hashing
+
+Compressed accounts are hashed before insertion into Merkle trees:
+
+```rust
+use light_hasher::{Poseidon, Hasher};
+
+pub fn hash_compressed_account(
+    account: &CompressedAccount,
+) -> Result<[u8; 32], HasherError> {
+    let data_hash = account.data
+        .as_ref()
+        .map(|d| d.data_hash)
+        .unwrap_or([0u8; 32]);
+    
+    let address = account.address.unwrap_or([0u8; 32]);
+    
+    Poseidon::hashv(&[
+        &account.owner,
+        &account.lamports.to_le_bytes(),
+        &address,
+        &data_hash,
+    ])
+}
+```
+
+**Hash inputs (in order):**
+1. Owner (32 bytes)
+2. Lamports (8 bytes, little-endian)
+3. Address or zero (32 bytes)
+4. Data hash or zero (32 bytes)
+
+## Address Derivation
+
+### derive_address
+
+Deterministically derive address from seeds:
+
+```rust
+use light_compressed_account::address::derive_address;
+
+pub fn derive_address(
+    seeds: &[[u8]],
+    program_id: &[u8; 32],
+) -> Result<[u8; 32], CompressedAccountError>
+```
+
+**Example:**
+```rust
+let seeds = &[
+    b"token-account",
+    owner_pubkey.as_ref(),
+    mint_pubkey.as_ref(),
+];
+
+let address = derive_address(seeds, &program_id)?;
+```
+
+### Address Seeds
+
+Structured seed representation:
+
+```rust
+pub struct AddressSeeds {
+    pub seeds: Vec<Vec<u8>>,
+    pub program_id: [u8; 32],
+}
+
+impl AddressSeeds {
+    pub fn derive_address(&self) -> Result<[u8; 32], CompressedAccountError> {
+        derive_address(
+            &self.seeds.iter().map(|s| s.as_slice()).collect::<Vec<_>>(),
+            &self.program_id,
+        )
+    }
+}
+```
+
+## Nullifier Computation
+
+Nullifiers prevent double-spending of compressed accounts:
+
+```rust
+use light_compressed_account::nullifier::derive_nullifier;
+
+pub fn derive_nullifier(
+    compressed_account_hash: &[u8; 32],
+    leaf_index: u64,
+    merkle_tree_pubkey: &[u8; 32],
+) -> Result<[u8; 32], HasherError>
+```
+
+**Hash inputs:**
+1. Compressed account hash
+2. Leaf index (8 bytes, little-endian)
+3. Merkle tree pubkey
+
+**Example:**
+```rust
+let nullifier = derive_nullifier(
+    &account_hash,
+    leaf_index,
+    &tree_pubkey,
+)?;
+
+// Insert nullifier into tree's input queue
+tree.insert_nullifier_into_queue(nullifier)?;
+```
+
+## Instruction Data
+
+### CompressedProof
+
+Gro
+th16 ZK proof (128 bytes):
+
+```rust
+pub struct CompressedProof {
+    pub a: [u8; 32],     // G1 point (compressed)
+    pub b: [u8; 64],     // G2 point (compressed)
+    pub c: [u8; 32],     // G1 point (compressed)
+}
+```
+
+### PackedCompressedAccountWithMerkleContext
+
+Compressed account with proof data:
+
+```rust
+pub struct PackedCompressedAccountWithMerkleContext {
+    pub compressed_account: CompressedAccount,
+    pub merkle_context: PackedMerkleContext,
+    pub root_index: u16,
+    pub read_only: bool,
+}
+
+pub struct PackedMerkleContext {
+    pub merkle_tree_pubkey_index: u8,
+    pub nullifier_queue_pubkey_index: u8,
+    pub leaf_index: u32,
+    pub queue_index: Option<u16>,
+}
+```
+
+**Purpose:** Used in transaction inputs to prove account existence
+
+### NewAddressParams
+
+Parameters for creating new addresses:
+
+```rust
+pub struct NewAddressParams {
+    pub seed: [u8; 32],
+    pub address_queue_pubkey: [u8; 32],
+    pub address_merkle_tree_pubkey: [u8; 32],
+    pub address_merkle_tree_root_index: u16,
+}
+```
+
+### CpiContext
+
+Cross-program invocation context:
+
+```rust
+pub struct CpiContext {
+    pub invoking_program: [u8; 32],
+    pub cpi_context_account_index: u8,
+    pub execute: bool,
+}
+```
+
+## Queue Types
+
+Enum for queue variants:
+
+```rust
+pub enum QueueType {
+    NullifierV1 = 1,
+    AddressV1 = 2,
+    InputStateV2 = 3,
+    AddressV2 = 4,
+    OutputStateV2 = 5,
+}
+```
+
+## Tree Types
+
+Enum for Merkle tree variants:
+
+```rust
+pub enum TreeType {
+    StateV1 = 1,
+    AddressV1 = 2,
+    StateV2 = 3,
+    AddressV2 = 4,
+    Unknown = 255,
+}
+```
+
+## Error Codes
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 12001 | `InputTooLarge` | Input exceeds maximum size |
+| 12002 | `InvalidChunkSize` | Chunk size validation failed |
+| 12003 | `InvalidSeeds` | Invalid seeds for address derivation |
+| 12004 | `InvalidRolloverThreshold` | Invalid tree rollover threshold |
+| 12005 | `InvalidInputLength` | Input length doesn't match expected |
+| 12010 | `InvalidAccountSize` | Account size mismatch |
+| 12011 | `AccountMutable` | Account mutability error |
+| 12012 | `AlreadyInitialized` | Account already initialized |
+| 12013 | `InvalidAccountBalance` | Invalid lamport balance |
+| 12014 | `FailedBorrowRentSysvar` | Failed to access rent sysvar |
+| 12015 | `DeriveAddressError` | Address derivation failed |
+| 12016 | `InvalidArgument` | Invalid function argument |
+| 12017 | `ZeroCopyExpectedAddress` | Expected address in zero-copy data |
+| 12018 | `InstructionDataExpectedAddress` | Expected address in instruction |
+| 12019 | `CompressedAccountDataNotInitialized` | Account data not initialized |
+| 12020 | `ExpectedDiscriminator` | Missing discriminator |
+| 12021 | `InstructionDataExpectedProof` | Missing proof in instruction |
+| 12022 | `ZeroCopyExpectedProof` | Expected proof in zero-copy data |
+| 12023 | `ExpectedDataHash` | Missing data hash |
+| 12024 | `InvalidCpiContext` | Invalid CPI context configuration |
+| 12025 | `InvalidProofSize` | Proof size != 128 bytes |
+
+## Usage Examples
+
+### Creating Compressed Accounts
+
+```rust
+use light_compressed_account::{
+    compressed_account::{CompressedAccount, CompressedAccountData},
+    address::derive_address,
+};
+use light_hasher::{Poseidon, Hasher, DataHasher};
+
+// Derive address
+let seeds = &[b"my-account", owner.as_ref()];
+let address = derive_address(seeds, &program_id)?;
+
+// Create account data
+let data = MyAccountData {
+    value: 42,
+}.try_to_vec()?;
+
+let data_hash = MyAccountData::hash_with_discriminator(&data)?;
+
+// Create compressed account
+let account = CompressedAccount {
+    owner: program_id,
+    lamports: 1_000_000,
+    address: Some(address),
+    data: Some(CompressedAccountData {
+        discriminator: MyAccountData::DISCRIMINATOR,
+        data,
+        data_hash,
+    }),
+};
+
+// Hash for Merkle tree insertion
+let account_hash = hash_compressed_account(&account)?;
+```
+
+### Computing Nullifiers
+
+```rust
+use light_compressed_account::nullifier::derive_nullifier;
+
+// When spending a compressed account
+let nullifier = derive_nullifier(
+    &account_hash,
+    leaf_index,
+    &merkle_tree_pubkey,
+)?;
+
+// Insert into nullifier queue
+tree.insert_nullifier_into_queue(nullifier)?;
+```
+
+### Validating Proofs
+
+```rust
+use light_compressed_account::instruction_data::compressed_proof::CompressedProof;
+use light_verifier::verify_inclusion_proof;
+
+// Verify account inclusion
+let proof = CompressedProof {
+    a: /* ... */,
+    b: /* ... */,
+    c: /* ... */,
+};
+
+verify_inclusion_proof(
+    &[root],
+    &[account_hash],
+    &proof,
+)?;
+```
+
+## Constants
+
+Program IDs and discriminators:
+
+```rust
+// Program IDs
+pub const SYSTEM_PROGRAM_ID: [u8; 32] = /* SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7 */;
+pub const ACCOUNT_COMPRESSION_PROGRAM_ID: [u8; 32] = /* compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq */;
+pub const COMPRESSED_TOKEN_PROGRAM_ID: [u8; 32] = /* cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m */;
+
+// Instruction discriminators
+pub const INVOKE_DISCRIMINATOR: [u8; 8] = [163, 223, 82, 38, 39, 61, 233, 233];
+pub const INVOKE_CPI_DISCRIMINATOR: [u8; 8] = [230, 224, 109, 130, 81, 205, 191, 65];
+```
+
+## Zero-Copy Types
+
+For efficient on-chain processing:
+
+```rust
+use light_zero_copy::ZeroCopy;
+
+// Zero-copy compressed account
+pub struct ZCompressedAccount {
+    // Direct memory access without deserialization
+}
+
+impl ZeroCopy for ZCompressedAccount {
+    fn zero_copy_at(data: &[u8]) -> Result<(&Self, &[u8]), Error>;
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Derive Addresses for Data Accounts">
+    Accounts with data MUST have deterministic addresses. This ensures uniqueness and enables lookups.
+  </Accordion>
+  
+  <Accordion title="Hash Data Consistently">
+    Always use `discriminator || data` when computing data hashes. The discriminator must be included.
+  </Accordion>
+  
+  <Accordion title="Validate Proofs Before State Changes">
+    Always verify ZK proofs before modifying any state or transferring lamports.
+  </Accordion>
+  
+  <Accordion title="Track Nullifiers">
+    Store and check nullifiers to prevent double-spending of compressed accounts.
+  </Accordion>
+</AccordionGroup>
+
+## Feature Flags
+
+<ParamField path="std" type="feature">
+  Enables standard library features
+</ParamField>
+
+<ParamField path="anchor" type="feature">
+  Enables Anchor framework integration
+</ParamField>
+
+<ParamField path="solana" type="feature">
+  Enables Solana SDK integration
+</ParamField>
+
+<ParamField path="pinocchio" type="feature">
+  Enables Pinocchio SDK integration
+</ParamField>
+
+<ParamField path="alloc" type="feature">
+  Enables allocation without std
+</ParamField>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Source Code" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/compressed-account">
+    View on GitHub
+  </Card>
+  <Card title="API Docs" icon="book" href="https://docs.rs/light-compressed-account">
+    Rust documentation
+  </Card>
+  <Card title="System Program" icon="server" href="/programs/system">
+    System program using compressed accounts
+  </Card>
+  <Card title="Light Protocol Paper" icon="file-lines" href="https://github.com/Lightprotocol/light-protocol/blob/main/light-paper.md">
+    Technical whitepaper
+  </Card>
+</CardGroup>

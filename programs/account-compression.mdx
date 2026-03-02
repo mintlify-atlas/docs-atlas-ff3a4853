@@ -1,0 +1,458 @@
+---
+title: "Account Compression Program"
+description: "Core program that owns and manages Merkle tree accounts for compressed state"
+---
+
+The Account Compression program is the foundation of Light Protocol's ZK compression system. It owns all Merkle tree accounts and provides instructions for tree operations.
+
+## Program ID
+
+```
+compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq
+```
+
+## Overview
+
+The Account Compression program manages two types of Merkle trees:
+
+- **State Merkle Trees**: Store compressed account state data
+- **Address Merkle Trees**: Track address ownership and inclusion proofs
+
+These trees enable efficient state compression while maintaining the security guarantees of the Solana blockchain.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Tree Management" icon="folder-tree">
+    Initialize, rollover, and manage Merkle tree lifecycle
+  </Card>
+  <Card title="Batched Operations" icon="layer-group">
+    Efficient batched append and nullify operations
+  </Card>
+  <Card title="Access Control" icon="lock">
+    Program registration and group-based permissions
+  </Card>
+  <Card title="Forester Support" icon="network-wired">
+    Optional forester designation for tree maintenance
+  </Card>
+</CardGroup>
+
+## Account Types
+
+### State Merkle Tree
+
+Stores compressed account data as leaves in a Merkle tree.
+
+<ParamField path="account_type" type="u64" required>
+  Account discriminator (varies by tree type)
+</ParamField>
+
+<ParamField path="metadata" type="MerkleTreeMetadata" required>
+  Tree configuration and access control
+  - `access_metadata`: Program owner, forester, associated queue
+  - `rollover_metadata`: Rollover threshold and fee configuration
+  - `queue_metadata`: Associated nullifier queue settings
+</ParamField>
+
+<ParamField path="root" type="[u8; 32]" required>
+  Current Merkle tree root
+</ParamField>
+
+<ParamField path="changelog" type="Vec<ChangelogEntry>">
+  History of root updates for proof verification
+</ParamField>
+
+<ParamField path="roots" type="Vec<[u8; 32]>">
+  Cached recent roots for efficient lookups
+</ParamField>
+
+### Address Merkle Tree
+
+Tracks addresses and their inclusion proofs using an indexed Merkle tree structure.
+
+<ParamField path="account_type" type="u64" required>
+  Account discriminator for address trees
+</ParamField>
+
+<ParamField path="metadata" type="MerkleTreeMetadata" required>
+  Tree configuration (similar to state trees)
+</ParamField>
+
+<ParamField path="indexed_changelog" type="Vec<IndexedChangelogEntry>">
+  History of address insertions and updates
+</ParamField>
+
+<ParamField path="next_index" type="u64" required>
+  Next available index for address insertion
+</ParamField>
+
+### Nullifier Queue
+
+Temporary queue for batched nullification of spent state.
+
+<ParamField path="account_type" type="u64" required>
+  Queue account discriminator
+</ParamField>
+
+<ParamField path="metadata" type="QueueMetadata" required>
+  Queue configuration and associated tree
+</ParamField>
+
+<ParamField path="batch_metadata" type="BatchMetadata">
+  Current batch information for efficient processing
+</ParamField>
+
+<ParamField path="value_vecs" type="Vec<Vec<[u8; 32]>>">
+  Batched nullifier values awaiting insertion
+</ParamField>
+
+## Core Instructions
+
+### Tree Initialization
+
+<AccordionGroup>
+  <Accordion title="initialize_state_merkle_tree_and_nullifier_queue" icon="tree">
+    Creates a new state Merkle tree and its associated nullifier queue.
+
+    **Accounts:**
+    - `authority` (signer): Tree authority
+    - `merkle_tree` (writable): Uninitialized state tree account
+    - `nullifier_queue` (writable): Uninitialized queue account
+    - `registered_program_pda`: Program registration proof
+
+    **Parameters:**
+    - `index`: Unique tree index
+    - `program_owner`: Optional program that owns the tree
+    - `forester`: Optional designated forester for tree maintenance
+    - `merkle_tree_config`: Tree height, changelog size, roots size, canopy depth
+    - `queue_config`: Capacity, sequence threshold, network fee
+
+    **Source:** `programs/account-compression/src/instructions/initialize_state_merkle_tree_and_nullifier_queue.rs`
+  </Accordion>
+
+  <Accordion title="initialize_address_merkle_tree_and_queue" icon="address-card">
+    Creates a new address Merkle tree and its associated queue.
+
+    **Accounts:**
+    - `authority` (signer): Tree authority
+    - `merkle_tree` (writable): Uninitialized address tree account
+    - `queue` (writable): Uninitialized address queue account
+    - `registered_program_pda`: Program registration proof
+
+    **Parameters:**
+    - `index`: Unique tree index
+    - `program_owner`: Optional program owner
+    - `forester`: Optional designated forester
+    - `address_merkle_tree_config`: Tree configuration
+    - `address_queue_config`: Queue configuration
+
+    **Source:** `programs/account-compression/src/instructions/initialize_address_merkle_tree_and_queue.rs`
+  </Accordion>
+
+  <Accordion title="initialize_batched_state_merkle_tree" icon="layer-group">
+    Creates a new batched state Merkle tree with output queue for efficient batch operations.
+
+    **Parameters:**
+    - `input`: Tree initialization data (height, capacity, root history size)
+
+    **Source:** `programs/account-compression/src/instructions/initialize_batched_state_merkle_tree.rs`
+  </Accordion>
+
+  <Accordion title="initialize_batched_address_merkle_tree" icon="address-book">
+    Creates a new batched address Merkle tree.
+
+    **Parameters:**
+    - `input`: Address tree initialization data
+
+    **Source:** `programs/account-compression/src/instructions/initialize_batched_address_merkle_tree.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Tree Operations
+
+<AccordionGroup>
+  <Accordion title="nullify_leaves" icon="eraser">
+    Nullifies (marks as spent) leaves in a state Merkle tree.
+
+    **Accounts:**
+    - `authority` (signer): Must be registered program or tree authority
+    - `registered_program_pda`: Program registration proof
+    - `merkle_tree` (writable): State tree to update
+    - `nullifier_queue` (writable): Queue to append nullifiers
+    - `log_wrapper`: Event logging
+
+    **Parameters:**
+    - `change_log_indices`: Indices in changelog for proof verification
+    - `leaves_queue_indices`: Indices of leaves to nullify
+    - `indices`: Leaf indices in the tree
+    - `proofs`: Merkle proofs for each leaf
+
+    **Source:** `programs/account-compression/src/instructions/nullify_leaves.rs`
+  </Accordion>
+
+  <Accordion title="update_address_merkle_tree" icon="pen-to-square">
+    Inserts a new address into an address Merkle tree.
+
+    **Parameters:**
+    - `changelog_index`: Index in changelog
+    - `indexed_changelog_index`: Index in indexed changelog
+    - `value`: Address value to insert
+    - `low_address_index`: Index of address below insertion point
+    - `low_address_value`: Value of low address
+    - `low_address_next_index`: Next index from low address
+    - `low_address_next_value`: Next value from low address
+    - `low_address_proof`: Merkle proof for low address
+
+    **Source:** `programs/account-compression/src/instructions/update_address_merkle_tree.rs`
+  </Accordion>
+
+  <Accordion title="batch_append" icon="file-arrow-down">
+    Appends a batch of leaves from the output queue to a batched state tree.
+
+    **Parameters:**
+    - `data`: Batched append instruction data
+
+    **Source:** `programs/account-compression/src/instructions/batch_append.rs`
+  </Accordion>
+
+  <Accordion title="batch_nullify" icon="trash-can">
+    Nullifies a batch of leaves using the input queue.
+
+    **Parameters:**
+    - `data`: Batched nullify instruction data with ZK proof
+
+    **Source:** `programs/account-compression/src/instructions/batch_nullify.rs`
+  </Accordion>
+
+  <Accordion title="batch_update_address_tree" icon="arrows-rotate">
+    Updates address tree with a batch of new addresses.
+
+    **Source:** `programs/account-compression/src/instructions/batch_update_address_tree.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Tree Rollover
+
+<AccordionGroup>
+  <Accordion title="rollover_state_merkle_tree_and_nullifier_queue" icon="rotate">
+    Rolls over a state tree to a new tree when capacity is reached.
+
+    **Accounts:**
+    - `authority` (signer): Fee payer
+    - `registered_program_pda`: Program registration
+    - `new_merkle_tree` (writable): Pre-created new tree
+    - `new_nullifier_queue` (writable): Pre-created new queue
+    - `old_merkle_tree` (writable): Current tree to mark as rolled over
+    - `old_nullifier_queue` (writable): Current queue to mark as rolled over
+
+    **Process:**
+    1. Validates new tree has same configuration as old tree
+    2. Marks old tree as rolled over (prevents new operations)
+    3. Links old tree to new tree for continuity
+
+    **Source:** `programs/account-compression/src/instructions/rollover_state_merkle_tree_and_nullifier_queue.rs`
+  </Accordion>
+
+  <Accordion title="rollover_address_merkle_tree_and_queue" icon="sync">
+    Rolls over an address tree to a new tree.
+
+    **Process:** Similar to state tree rollover
+
+    **Source:** `programs/account-compression/src/instructions/rollover_address_merkle_tree_and_queue.rs`
+  </Accordion>
+
+  <Accordion title="rollover_batched_state_merkle_tree" icon="arrows-spin">
+    Rolls over a batched state Merkle tree.
+
+    **Source:** `programs/account-compression/src/instructions/rollover_batched_state_merkle_tree.rs`
+  </Accordion>
+
+  <Accordion title="rollover_batched_address_merkle_tree" icon="rotate-right">
+    Rolls over a batched address Merkle tree.
+
+    **Source:** `programs/account-compression/src/instructions/rollover_batched_address_merkle_tree.rs`
+  </Accordion>
+</AccordionGroup>
+
+### Access Control
+
+<AccordionGroup>
+  <Accordion title="initialize_group_authority" icon="users">
+    Initializes a group authority PDA that can register multiple programs.
+
+    **Parameters:**
+    - `authority`: Public key of the group authority
+
+    **Use Case:** Allows multiple programs to share access to the same trees
+
+    **Source:** `programs/account-compression/src/instructions/initialize_group_authority.rs`
+  </Accordion>
+
+  <Accordion title="update_group_authority" icon="user-pen">
+    Updates the authority of an existing group.
+
+    **Parameters:**
+    - `authority`: New authority public key
+
+    **Source:** `programs/account-compression/src/instructions/update_group_authority.rs`
+  </Accordion>
+
+  <Accordion title="register_program_to_group" icon="user-plus">
+    Registers a program to a group, granting it access to group trees.
+
+    **Accounts:**
+    - `authority` (signer): Group authority
+    - `program_to_be_registered`: Program to grant access
+    - `registered_program_pda` (writable): PDA to create
+    - `group_authority_pda`: Group PDA
+
+    **Source:** `programs/account-compression/src/instructions/register_program.rs`
+  </Accordion>
+
+  <Accordion title="deregister_program" icon="user-minus">
+    Removes a program's registration from a group.
+
+    **Source:** `programs/account-compression/src/instructions/deregister_program.rs`
+  </Accordion>
+</AccordionGroup>
+
+## Usage in Custom Programs
+
+### Registering Your Program
+
+Before your program can use Account Compression, it must be registered:
+
+```rust
+use account_compression::cpi::accounts::RegisterProgramToGroup;
+use anchor_lang::prelude::*;
+
+#[derive(Accounts)]
+pub struct RegisterProgram<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    /// CHECK: This is the program being registered
+    pub program_to_be_registered: AccountInfo<'info>,
+    
+    #[account(mut)]
+    /// CHECK: PDA will be created
+    pub registered_program_pda: AccountInfo<'info>,
+    
+    /// CHECK: Group authority PDA
+    pub group_authority_pda: AccountInfo<'info>,
+    
+    pub account_compression_program: Program<'info, AccountCompression>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn register_my_program(ctx: Context<RegisterProgram>) -> Result<()> {
+    let cpi_accounts = RegisterProgramToGroup {
+        authority: ctx.accounts.authority.to_account_info(),
+        program_to_be_registered: ctx.accounts.program_to_be_registered.to_account_info(),
+        registered_program_pda: ctx.accounts.registered_program_pda.to_account_info(),
+        group_authority_pda: ctx.accounts.group_authority_pda.to_account_info(),
+        system_program: ctx.accounts.system_program.to_account_info(),
+    };
+    
+    let cpi_ctx = CpiContext::new(
+        ctx.accounts.account_compression_program.to_account_info(),
+        cpi_accounts,
+    );
+    
+    account_compression::cpi::register_program_to_group(cpi_ctx)
+}
+```
+
+### Nullifying Leaves
+
+Example of nullifying compressed account state:
+
+```rust
+use account_compression::cpi::accounts::NullifyLeaves;
+
+#[derive(Accounts)]
+pub struct NullifyCompressedAccounts<'info> {
+    pub authority: Signer<'info>,
+    
+    /// CHECK: Registered program PDA
+    pub registered_program_pda: AccountInfo<'info>,
+    
+    #[account(mut)]
+    /// CHECK: State merkle tree
+    pub merkle_tree: AccountInfo<'info>,
+    
+    #[account(mut)]
+    /// CHECK: Nullifier queue
+    pub nullifier_queue: AccountInfo<'info>,
+    
+    /// CHECK: Log wrapper for events
+    pub log_wrapper: AccountInfo<'info>,
+    
+    pub account_compression_program: Program<'info, AccountCompression>,
+}
+
+pub fn nullify_accounts(
+    ctx: Context<NullifyCompressedAccounts>,
+    change_log_indices: Vec<u64>,
+    leaves_queue_indices: Vec<u16>,
+    indices: Vec<u64>,
+    proofs: Vec<Vec<[u8; 32]>>,
+) -> Result<()> {
+    let cpi_accounts = NullifyLeaves {
+        authority: ctx.accounts.authority.to_account_info(),
+        registered_program_pda: ctx.accounts.registered_program_pda.to_account_info(),
+        log_wrapper: ctx.accounts.log_wrapper.to_account_info(),
+        merkle_tree: ctx.accounts.merkle_tree.to_account_info(),
+        nullifier_queue: ctx.accounts.nullifier_queue.to_account_info(),
+    };
+    
+    let cpi_ctx = CpiContext::new(
+        ctx.accounts.account_compression_program.to_account_info(),
+        cpi_accounts,
+    );
+    
+    account_compression::cpi::nullify_leaves(
+        cpi_ctx,
+        change_log_indices,
+        leaves_queue_indices,
+        indices,
+        proofs,
+    )
+}
+```
+
+## Error Codes
+
+Common errors from the Account Compression program:
+
+| Code | Name | Description |
+|------|------|-------------|
+| 6000 | InvalidAuthority | Authority does not match tree metadata |
+| 6001 | MerkleTreeFull | Tree has reached capacity |
+| 6002 | InvalidMerkleProof | Provided Merkle proof is invalid |
+| 6003 | LeafAlreadyNullified | Attempting to nullify already-nullified leaf |
+| 6004 | InvalidChangelogIndex | Changelog index out of bounds |
+| 6005 | InvalidQueueType | Queue type doesn't match operation |
+| 6006 | RolloverNotReady | Tree not ready for rollover |
+| 6007 | InvalidRegisteredProgram | Program not registered for this tree |
+
+**Source:** `programs/account-compression/src/errors.rs`
+
+## Source Code
+
+View the full source code on GitHub:
+
+- [Account Compression Program](https://github.com/Lightprotocol/light-protocol/tree/main/programs/account-compression)
+- [Batched Merkle Tree Library](https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/batched-merkle-tree)
+- [Concurrent Merkle Tree Library](https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/concurrent-merkle-tree)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Light System Program" icon="shield-check" href="/programs/system">
+    Learn about state validation
+  </Card>
+  <Card title="Build Custom Program" icon="code" href="/guides/custom-programs">
+    Use Account Compression in your program
+  </Card>
+</CardGroup>

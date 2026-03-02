@@ -1,0 +1,255 @@
+---
+title: "@lightprotocol/stateless.js Overview"
+description: "JavaScript API for Light Protocol & ZK Compression"
+---
+
+## Introduction
+
+`@lightprotocol/stateless.js` is the core JavaScript SDK for building applications on Light Protocol. It provides a comprehensive API for working with compressed accounts, managing state trees, and interacting with the Light system program.
+
+## Installation
+
+```bash npm
+npm install @lightprotocol/stateless.js @solana/web3.js
+```
+
+```bash yarn
+yarn add @lightprotocol/stateless.js @solana/web3.js
+```
+
+```bash pnpm
+pnpm add @lightprotocol/stateless.js @solana/web3.js
+```
+
+## Package Information
+
+<CardGroup cols={2}>
+  <Card title="Version" icon="tag">
+    0.23.0-beta.8
+  </Card>
+  <Card title="License" icon="scale-balanced">
+    Apache-2.0
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+### Creating an RPC Connection
+
+The SDK provides a custom RPC client that extends Solana's Connection with compression-specific methods:
+
+```typescript
+import { createRpc } from '@lightprotocol/stateless.js';
+
+// Connect to local test validator
+const rpc = createRpc();
+
+// Or connect to a custom endpoint
+const rpc = createRpc(
+  'https://devnet.helius-rpc.com',
+  'https://devnet.helius-rpc.com'
+);
+```
+
+### Compressing Lamports
+
+Compress SOL into a compressed account to save on rent:
+
+```typescript
+import { compress } from '@lightprotocol/stateless.js';
+import { Keypair } from '@solana/web3.js';
+
+const payer = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Compress 0.01 SOL (10 million lamports)
+const signature = await compress(
+  rpc,
+  payer,
+  10_000_000,
+  recipient
+);
+
+console.log('Compressed lamports:', signature);
+```
+
+### Transferring Compressed Lamports
+
+Transfer compressed SOL between accounts:
+
+```typescript
+import { transfer } from '@lightprotocol/stateless.js';
+
+const owner = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Transfer 0.001 SOL (1 million lamports)
+const signature = await transfer(
+  rpc,
+  payer,
+  1_000_000,
+  owner,
+  recipient
+);
+
+console.log('Transferred compressed lamports:', signature);
+```
+
+### Decompressing Back to SOL
+
+Decompress back to regular SOL:
+
+```typescript
+import { decompress } from '@lightprotocol/stateless.js';
+
+const owner = Keypair.generate();
+const recipient = Keypair.generate().publicKey;
+
+// Decompress 0.001 SOL
+const signature = await decompress(
+  rpc,
+  payer,
+  1_000_000,
+  recipient
+);
+
+console.log('Decompressed to regular SOL:', signature);
+```
+
+## Core Concepts
+
+### State Trees
+
+Compressed accounts are stored in Merkle trees. The SDK automatically manages tree selection:
+
+```typescript
+import { selectStateTreeInfo } from '@lightprotocol/stateless.js';
+
+// Get available state trees
+const stateTreeInfos = await rpc.getStateTreeInfos();
+
+// Select an appropriate tree
+const stateTree = selectStateTreeInfo(stateTreeInfos);
+
+// Use the tree for operations
+await compress(
+  rpc,
+  payer,
+  10_000_000,
+  recipient,
+  stateTree  // Optional: specify output tree
+);
+```
+
+### Validity Proofs
+
+When spending compressed accounts, you need validity proofs:
+
+```typescript
+import { bn } from '@lightprotocol/stateless.js';
+
+// Get compressed accounts
+const accounts = await rpc.getCompressedAccountsByOwner(
+  owner.publicKey
+);
+
+// Request proof for the accounts
+const proof = await rpc.getValidityProof(
+  accounts.items.map(acc => bn(acc.hash))
+);
+
+// Use proof in transaction
+const ix = await LightSystemProgram.transfer({
+  payer: payer.publicKey,
+  inputCompressedAccounts: accounts.items,
+  toAddress: recipient,
+  lamports: 1_000_000,
+  recentInputStateRootIndices: proof.rootIndices,
+  recentValidityProof: proof.compressedProof,
+});
+```
+
+## Key Features
+
+### Account Compression
+
+- **Rent-free accounts**: Store account state in Merkle trees instead of on-chain accounts
+- **Zero-knowledge proofs**: Prove account validity without revealing full state
+- **Batched operations**: Multiple account operations in a single transaction
+
+### RPC Methods
+
+The SDK provides comprehensive RPC methods for querying compressed accounts:
+
+- `getCompressedAccount()` - Fetch a single compressed account
+- `getCompressedAccountsByOwner()` - Get all accounts owned by a public key
+- `getCompressedBalance()` - Query compressed SOL balance
+- `getValidityProof()` - Request ZK proofs for transactions
+
+See [RPC Methods](/sdk/stateless-js/rpc-methods) for the complete reference.
+
+### Utility Functions
+
+- BN254 field element helpers for working with account hashes
+- Transaction building utilities
+- State tree selection algorithms
+- Proof formatting and validation
+
+## TypeScript Support
+
+The SDK is written in TypeScript with full type definitions:
+
+```typescript
+import type {
+  CompressedAccountWithMerkleContext,
+  ValidityProofWithContext,
+  TreeInfo,
+  Rpc,
+} from '@lightprotocol/stateless.js';
+
+// All types are exported for use in your application
+const account: CompressedAccountWithMerkleContext = {
+  hash: bn(accountHash),
+  treeInfo: stateTree,
+  leafIndex: 42,
+  owner: owner.publicKey,
+  lamports: bn(1_000_000),
+  address: null,
+  data: null,
+};
+```
+
+## Browser Support
+
+The package supports both Node.js and browser environments:
+
+```typescript
+// Node.js
+import { createRpc } from '@lightprotocol/stateless.js';
+
+// Browser
+import { createRpc } from '@lightprotocol/stateless.js/browser';
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Compressed Accounts" icon="folder-tree" href="/sdk/stateless-js/compressed-accounts">
+    Learn how to work with compressed accounts
+  </Card>
+  <Card title="RPC Methods" icon="code" href="/sdk/stateless-js/rpc-methods">
+    Explore all available RPC methods
+  </Card>
+  <Card title="Compressed Tokens" icon="coins" href="/sdk/compressed-token/overview">
+    Build with compressed SPL tokens
+  </Card>
+  <Card title="API Reference" icon="book" href="https://js-docs.lightprotocol.com">
+    Full TypeScript API documentation
+  </Card>
+</CardGroup>
+
+## Resources
+
+- [GitHub Repository](https://github.com/Lightprotocol/light-protocol/tree/main/js/stateless.js)
+- [NPM Package](https://www.npmjs.com/package/@lightprotocol/stateless.js)
+- [TypeScript Docs](https://js-docs.lightprotocol.com)

@@ -1,0 +1,447 @@
+---
+title: "Installation"
+description: "Set up Light Protocol development environment"
+icon: "download"
+---
+
+## Prerequisites
+
+Before installing Light Protocol, ensure you have the following:
+
+<AccordionGroup>
+  <Accordion title="Node.js and npm" icon="node-js">
+    Required for JavaScript/TypeScript development.
+    
+    **Recommended**: Node.js 20.9.0 LTS or higher
+    
+    ```bash
+    # Check your version
+    node --version
+    npm --version
+    ```
+    
+    Download from [nodejs.org](https://nodejs.org/)
+  </Accordion>
+  
+  <Accordion title="Rust and Cargo" icon="rust">
+    Required for building Solana programs with Light Protocol.
+    
+    **Required**: Rust stable and nightly toolchains
+    
+    ```bash
+    # Install Rust
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    
+    # Install nightly toolchain
+    rustup toolchain install nightly
+    
+    # Check versions
+    rustc --version
+    cargo --version
+    ```
+  </Accordion>
+  
+  <Accordion title="Solana CLI" icon="terminal">
+    Required for deploying and testing programs.
+    
+    **Recommended**: Solana CLI 1.18+ (compatible with SDK 2.3)
+    
+    ```bash
+    # Install Solana CLI
+    sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+    
+    # Check version
+    solana --version
+    
+    # Generate keypair
+    solana-keygen new -o ~/.config/solana/id.json
+    ```
+  </Accordion>
+  
+  <Accordion title="Build Tools" icon="wrench">
+    Platform-specific build dependencies.
+    
+    **Linux (Ubuntu/Debian)**:
+    ```bash
+    sudo apt-get install lld clang build-essential autoconf automake libtool zlib1g-dev pkg-config libssl-dev
+    ```
+    
+    **Linux (Fedora)**:
+    ```bash
+    sudo dnf install clang lld
+    ```
+    
+    **Linux (Arch)**:
+    ```bash
+    sudo pacman -S lld clang
+    ```
+    
+    **macOS**:
+    ```bash
+    brew install llvm
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## CLI Installation
+
+The Light Protocol CLI provides tools for local development and testing.
+
+<CodeGroup>
+```bash npm
+npm install -g @lightprotocol/zk-compression-cli
+```
+
+```bash yarn
+yarn global add @lightprotocol/zk-compression-cli
+```
+
+```bash pnpm
+pnpm add -g @lightprotocol/zk-compression-cli
+```
+</CodeGroup>
+
+Verify installation:
+
+```bash
+light --version
+```
+
+<Tip>
+  The CLI includes the `light test-validator` command which runs a local Solana validator pre-configured with all Light Protocol programs.
+</Tip>
+
+## JavaScript SDK
+
+Install the Light Protocol JavaScript libraries for building client applications.
+
+### Core SDK (@lightprotocol/stateless.js)
+
+For working with compressed accounts and general ZK Compression features:
+
+<CodeGroup>
+```bash npm
+npm install @lightprotocol/stateless.js @solana/web3.js
+```
+
+```bash yarn
+yarn add @lightprotocol/stateless.js @solana/web3.js
+```
+
+```bash pnpm
+pnpm add @lightprotocol/stateless.js @solana/web3.js
+```
+</CodeGroup>
+
+### Compressed Token SDK (@lightprotocol/compressed-token)
+
+For working with compressed tokens:
+
+<CodeGroup>
+```bash npm
+npm install @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+
+```bash yarn
+yarn add @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+
+```bash pnpm
+pnpm add @lightprotocol/compressed-token @lightprotocol/stateless.js @solana/web3.js @solana/spl-token
+```
+</CodeGroup>
+
+<Info>
+  The `@lightprotocol/compressed-token` package depends on `@lightprotocol/stateless.js`, so both need to be installed.
+</Info>
+
+### Quick Test
+
+Verify the installation:
+
+```typescript
+import { Rpc } from '@lightprotocol/stateless.js';
+import { Connection } from '@solana/web3.js';
+
+// Create RPC connection
+const connection = new Connection('http://127.0.0.1:8899');
+const rpc = await Rpc.createRpc(connection);
+
+console.log('Light Protocol SDK installed successfully!');
+```
+
+## Rust SDK
+
+Add Light Protocol to your Solana program's `Cargo.toml`.
+
+### For Anchor Programs
+
+```toml [Cargo.toml]
+[dependencies]
+anchor-lang = "0.31.1"
+light-sdk = "0.23.0"
+light-compressed-token = { version = "2.0.0", features = ["cpi"] }
+light-system-program = { version = "2.0.0", features = ["cpi"] }
+account-compression = { version = "2.0.0", features = ["cpi"] }
+```
+
+### For Native Programs
+
+```toml [Cargo.toml]
+[dependencies]
+solana-program = "2.3"
+light-sdk = "0.23.0"
+light-compressed-account = "0.11.0"
+light-hasher = "5.0.0"
+```
+
+### Client Libraries
+
+For building Rust clients or test utilities:
+
+```toml [Cargo.toml]
+[dependencies]
+light-client = "0.23.0"
+light-token-client = "0.23.0"
+light-program-test = "0.23.0"  # For testing
+```
+
+<Warning>
+  Make sure to use compatible versions. Light Protocol v0.23.0 works with Solana SDK 2.3 and Anchor 0.31.1.
+</Warning>
+
+## Building from Source
+
+For advanced users who want to build Light Protocol from source.
+
+### Clone Repository
+
+```bash
+git clone https://github.com/Lightprotocol/light-protocol.git
+cd light-protocol
+```
+
+### Install Dependencies
+
+```bash
+./scripts/install.sh
+```
+
+This installs:
+- Solana CLI tools
+- Anchor framework
+- Node.js dependencies
+- Gnark proving keys (subset for testing)
+
+<Accordion title="Full Proving Keys (Optional)">
+  If you need the complete set of production proving keys:
+  
+  ```bash
+  ./scripts/install.sh --full-keys
+  ```
+  
+  <Warning>
+    Full keys are large (~10GB+). Only needed for production deployments.
+  </Warning>
+</Accordion>
+
+### Activate Development Environment
+
+```bash
+./scripts/devenv.sh
+```
+
+This sets up a shell with all dependencies in your `PATH`.
+
+### Build the Project
+
+```bash
+./scripts/build.sh
+```
+
+This builds:
+- All Rust programs and libraries
+- TypeScript packages
+- CLI tools
+
+### Run Tests
+
+```bash
+./scripts/test.sh
+```
+
+<Tip>
+  For specific test suites, see the [Testing Guide](/guides/testing).
+</Tip>
+
+## Development Containers
+
+Light Protocol supports Development Containers for consistent environments.
+
+### VS Code
+
+1. Install the **Dev Containers** extension
+2. Open the repository in VS Code
+3. Click "Reopen in Container" when prompted
+
+### Other IDEs
+
+- **Neovim**: Use [nvim-dev-container](https://github.com/esensar/nvim-dev-container)
+- **Emacs**: Use [lsp-docker](https://github.com/emacs-lsp/lsp-docker)
+
+The container includes all dependencies pre-configured.
+
+## Network Endpoints
+
+Configure your application to connect to different networks.
+
+### Localnet
+
+```typescript
+const connection = new Connection('http://127.0.0.1:8899');
+const rpc = await Rpc.createRpc(connection, {
+  proverUrl: 'http://127.0.0.1:3001',
+  indexerUrl: 'http://127.0.0.1:8784',
+});
+```
+
+### Devnet
+
+```typescript
+const connection = new Connection('https://api.devnet.solana.com');
+const rpc = await Rpc.createRpc(connection, {
+  proverUrl: 'https://prover.devnet.lightprotocol.com',
+  indexerUrl: 'https://devnet.helius-rpc.com',
+});
+```
+
+### Mainnet Beta
+
+```typescript
+const connection = new Connection('https://api.mainnet-beta.solana.com');
+const rpc = await Rpc.createRpc(connection, {
+  proverUrl: 'https://prover.mainnet.lightprotocol.com',
+  indexerUrl: 'https://mainnet.helius-rpc.com',
+});
+```
+
+<Note>
+  Helius provides the official Photon indexer for devnet and mainnet. Visit [helius.dev](https://helius.dev) to get an API key.
+</Note>
+
+## Verify Installation
+
+Test your complete setup:
+
+<Steps>
+  <Step title="Start Test Validator">
+    ```bash
+    light test-validator
+    ```
+    
+    Keep this running in a separate terminal.
+  </Step>
+  
+  <Step title="Run Example">
+    Create a test file `test.ts`:
+    
+    ```typescript
+    import { Rpc, compress } from '@lightprotocol/stateless.js';
+    import { Keypair, Connection } from '@solana/web3.js';
+    
+    const payer = Keypair.generate();
+    const connection = new Connection('http://127.0.0.1:8899');
+    const rpc = await Rpc.createRpc(connection);
+    
+    // Airdrop SOL
+    const airdrop = await connection.requestAirdrop(
+      payer.publicKey,
+      1e9
+    );
+    await connection.confirmTransaction(airdrop);
+    
+    console.log('✓ Installation verified!');
+    ```
+    
+    Run it:
+    ```bash
+    npx tsx test.ts
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Command not found: light" icon="triangle-exclamation">
+    The CLI wasn't added to PATH. Try:
+    
+    ```bash
+    # Check where npm installs global packages
+    npm config get prefix
+    
+    # Add to PATH (in ~/.bashrc or ~/.zshrc)
+    export PATH="$PATH:$(npm config get prefix)/bin"
+    ```
+  </Accordion>
+  
+  <Accordion title="Test validator fails to start" icon="server">
+    Ensure no other Solana validator is running:
+    
+    ```bash
+    # Kill existing validators
+    killall solana-test-validator
+    
+    # Clear ledger data
+    rm -rf test-ledger/
+    
+    # Restart
+    light test-validator
+    ```
+  </Accordion>
+  
+  <Accordion title="Rust build errors" icon="rust">
+    Install missing system dependencies:
+    
+    **Ubuntu/Debian**:
+    ```bash
+    sudo apt install build-essential autoconf automake libtool zlib1g-dev pkg-config libssl-dev
+    ```
+    
+    **macOS**:
+    ```bash
+    xcode-select --install
+    ```
+  </Accordion>
+  
+  <Accordion title="Version conflicts" icon="code-branch">
+    Ensure all packages use compatible versions:
+    
+    - Light Protocol SDK: v0.23.0
+    - Solana SDK: v2.3.x
+    - Anchor: v0.31.1
+    
+    Clear cache and reinstall:
+    ```bash
+    rm -rf node_modules package-lock.json
+    npm install
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first compressed token application
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Explore all CLI commands
+  </Card>
+  <Card title="JavaScript SDK" icon="js" href="/sdk/stateless-js/overview">
+    Learn the TypeScript SDK
+  </Card>
+  <Card title="Rust SDK" icon="rust" href="/sdk/rust/overview">
+    Integrate into Solana programs
+  </Card>
+</CardGroup>

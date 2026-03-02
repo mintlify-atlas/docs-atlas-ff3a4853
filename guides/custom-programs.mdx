@@ -1,0 +1,757 @@
+---
+title: 'Building Custom Programs with Light'
+description: 'Complete guide to building Solana programs that use compressed accounts and tokens'
+---
+
+Learn how to build custom Solana programs that leverage Light Protocol's compression to reduce state costs while maintaining full composability.
+
+## Overview
+
+Light Protocol allows you to build standard Solana programs with Anchor while storing state in compressed accounts. Your programs can interact with compressed tokens, create custom compressed state, and invoke other programs through CPIs.
+
+### Architecture
+
+Light Protocol programs follow this architecture:
+
+```
+Your Program (Anchor)
+    ↓
+Light SDK (Rust)
+    ↓
+Light System Program (CPI)
+    ↓
+Account Compression Program
+    ↓
+Merkle Trees (On-chain State)
+```
+
+## Project Setup
+
+<Steps>
+
+### Initialize Anchor Project
+
+Create a new Anchor program:
+
+```bash
+anchor init my-compressed-app
+cd my-compressed-app
+```
+
+### Add Dependencies
+
+Update `Cargo.toml` with Light Protocol dependencies:
+
+```toml Cargo.toml
+[dependencies]
+anchor-lang = "0.30.1"
+light-sdk = { version = "0.13.0", features = ["cpi"] }
+light-instruction-decoder = "0.13.0"
+borsh = "0.10.3"
+
+[dev-dependencies]
+light-program-test = "0.13.0"
+light-test-utils = "0.13.0"
+tokio = { version = "1.40.0", features = ["full"] }
+serial_test = "3.1.1"
+```
+
+### Install Light CLI
+
+Install the ZK Compression CLI for local development:
+
+```bash
+npm install -g @lightprotocol/zk-compression-cli
+```
+
+</Steps>
+
+## Program Structure
+
+### Define Program ID and CPI Signer
+
+Every Light program needs a CPI signer for interacting with the Light System Program:
+
+```rust lib.rs
+use anchor_lang::prelude::*;
+use light_sdk::{
+    derive_light_cpi_signer,
+    CpiSigner,
+};
+use light_instruction_decoder::instruction_decoder;
+
+declare_id!("YourProgramID111111111111111111111111111");
+
+// CPI signer for Light System Program interactions
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("YourProgramID111111111111111111111111111");
+
+#[instruction_decoder]
+#[program]
+pub mod my_compressed_app {
+    use super::*;
+    // Your instructions here
+}
+```
+
+<Tip>
+**Instruction Decoder**: The `#[instruction_decoder]` macro automatically generates instruction parsing for your program, making it compatible with Light Protocol's indexer.
+</Tip>
+
+### Define Account Types
+
+Create compressed account structures with proper traits:
+
+```rust Account Definition
+use light_sdk::{LightDiscriminator, LightHasher};
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[event]
+#[derive(Clone, Debug, Default, LightHasher, LightDiscriminator)]
+pub struct MyCompressedAccount {
+    #[hash]
+    pub name: String,
+    pub nested: NestedData,
+}
+
+#[derive(LightHasher, Clone, Debug, AnchorSerialize, AnchorDeserialize)]
+pub struct NestedData {
+    pub one: u16,
+    pub two: u16,
+    pub three: u16,
+    pub four: u16,
+    pub five: u16,
+    pub six: u16,
+    pub seven: u16,
+    pub eight: u16,
+    pub nine: u16,
+    pub ten: u16,
+    pub eleven: u16,
+    pub twelve: u16,
+}
+
+impl Default for NestedData {
+    fn default() -> Self {
+        Self {
+            one: 1,
+            two: 2,
+            three: 3,
+            four: 4,
+            five: 5,
+            six: 6,
+            seven: 7,
+            eight: 8,
+            nine: 9,
+            ten: 10,
+            eleven: 11,
+            twelve: 12,
+        }
+    }
+}
+```
+
+## Core Instructions
+
+### Create Compressed Account
+
+Implement account creation with address derivation:
+
+```rust Create Instruction
+use light_sdk::{
+    account::LightAccount,
+    address::v1::derive_address,
+    cpi::{
+        v1::CpiAccounts,
+        InvokeLightSystemProgram,
+        LightCpiInstruction,
+    },
+    instruction::{
+        PackedAddressTreeInfo,
+        PackedAddressTreeInfoExt,
+        ValidityProof,
+    },
+};
+
+pub fn create_compressed_account<'info>(
+    ctx: Context<'_, '_, '_, 'info, WithCompressedAccount<'info>>,
+    proof: ValidityProof,
+    address_tree_info: PackedAddressTreeInfo,
+    output_tree_index: u8,
+    name: String,
+) -> Result<()> {
+    // Setup CPI accounts
+    let light_cpi_accounts = CpiAccounts::new(
+        ctx.accounts.signer.as_ref(),
+        ctx.remaining_accounts,
+        crate::LIGHT_CPI_SIGNER,
+    );
+
+    // Derive address from seeds (like PDA derivation)
+    let (address, address_seed) = derive_address(
+        &[b"compressed", name.as_bytes()],
+        &address_tree_info
+            .get_tree_pubkey(&light_cpi_accounts)
+            .map_err(|_| ErrorCode::AccountNotEnoughKeys)?,
+        &crate::ID,
+    );
+
+    let new_address_params = address_tree_info
+        .into_new_address_params_assigned_packed(address_seed, Some(0));
+
+    // Initialize compressed account
+    let mut my_compressed_account = LightAccount::<MyCompressedAccount>::new_init(
+        &crate::ID,
+        Some(address),
+        output_tree_index,
+    );
+
+    // Set account data
+    my_compressed_account.name = name;
+    my_compressed_account.nested = NestedData::default();
+
+    // Invoke CPI to Light System Program
+    InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .mode_v1()
+        .with_light_account(my_compressed_account)?
+        .with_new_addresses(&[new_address_params])
+        .invoke(light_cpi_accounts)?;
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct WithCompressedAccount<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+```
+
+### Update Compressed Account
+
+Modify existing compressed account state:
+
+```rust Update Instruction
+use light_sdk::instruction::account_meta::CompressedAccountMeta;
+
+pub fn update_compressed_account<'info>(
+    ctx: Context<'_, '_, '_, 'info, UpdateAccount<'info>>,
+    proof: ValidityProof,
+    my_compressed_account: MyCompressedAccount,
+    account_meta: CompressedAccountMeta,
+    nested_data: NestedData,
+) -> Result<()> {
+    // Load account for mutation
+    let mut my_compressed_account = LightAccount::<MyCompressedAccount>::new_mut(
+        &crate::ID,
+        &account_meta,
+        my_compressed_account,
+    )?;
+
+    // Update data
+    my_compressed_account.nested = nested_data;
+
+    let light_cpi_accounts = CpiAccounts::new(
+        ctx.accounts.signer.as_ref(),
+        ctx.remaining_accounts,
+        crate::LIGHT_CPI_SIGNER,
+    );
+
+    // Invoke update
+    InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .mode_v1()
+        .with_light_account(my_compressed_account)?
+        .invoke(light_cpi_accounts)?;
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct UpdateAccount<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+```
+
+### Close Compressed Account
+
+Reclaim lamports by closing accounts:
+
+```rust Close Instruction
+pub fn close_compressed_account<'info>(
+    ctx: Context<'_, '_, '_, 'info, UpdateAccount<'info>>,
+    proof: ValidityProof,
+    my_compressed_account: MyCompressedAccount,
+    account_meta: CompressedAccountMeta,
+) -> Result<()> {
+    // Create close operation
+    let my_compressed_account = LightAccount::<MyCompressedAccount>::new_close(
+        &crate::ID,
+        &account_meta,
+        my_compressed_account,
+    )?;
+
+    let light_cpi_accounts = CpiAccounts::new(
+        ctx.accounts.signer.as_ref(),
+        ctx.remaining_accounts,
+        crate::LIGHT_CPI_SIGNER,
+    );
+
+    // Invoke close
+    InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .mode_v1()
+        .with_light_account(my_compressed_account)?
+        .invoke(light_cpi_accounts)?;
+
+    Ok(())
+}
+```
+
+## V2 Support (Batched Trees)
+
+Light Protocol V2 uses batched Merkle trees for improved performance:
+
+```rust V2 Instructions
+use light_sdk::address::v2::*;
+
+pub fn create_compressed_account_v2<'info>(
+    ctx: Context<'_, '_, '_, 'info, WithCompressedAccount<'info>>,
+    proof: ValidityProof,
+    address_tree_info: PackedAddressTreeInfo,
+    output_tree_index: u8,
+    name: String,
+) -> Result<()> {
+    // Use V2 CPI accounts
+    let light_cpi_accounts = light_sdk_types::cpi_accounts::v2::CpiAccounts::new(
+        ctx.accounts.signer.as_ref(),
+        ctx.remaining_accounts,
+        crate::LIGHT_CPI_SIGNER,
+    );
+
+    // V2 address derivation
+    let (address, address_seed) = derive_address(
+        &[b"compressed", name.as_bytes()],
+        &address_tree_info
+            .get_tree_pubkey(&light_cpi_accounts)
+            .map_err(|_| ErrorCode::AccountNotEnoughKeys)?,
+        &crate::ID,
+    );
+
+    let new_address_params = address_tree_info
+        .into_new_address_params_assigned_packed(address_seed, Some(0));
+
+    let mut my_compressed_account = LightAccount::<MyCompressedAccount>::new_init(
+        &crate::ID,
+        Some(address),
+        output_tree_index,
+    );
+
+    my_compressed_account.name = name;
+    my_compressed_account.nested = NestedData::default();
+
+    // V2 CPI - no mode_v1() call
+    InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .with_light_account(my_compressed_account)?
+        .with_new_addresses(&[new_address_params])
+        .invoke(light_cpi_accounts)?;
+
+    Ok(())
+}
+```
+
+<Warning>
+**V1 vs V2 Differences**:
+- V2 uses `light_sdk_types::cpi_accounts::v2::CpiAccounts`
+- No `.mode_v1()` call in V2
+- Different address derivation functions
+- Batched tree operations for better performance
+</Warning>
+
+## Working with Regular Accounts
+
+You can mix compressed and regular Solana accounts:
+
+```rust Mixed Account Types
+#[account]
+pub struct MyRegularAccount {
+    name: String,
+}
+
+pub fn without_compressed_account<'info>(
+    ctx: Context<'_, '_, '_, 'info, WithoutCompressedAccount<'info>>,
+    name: String,
+) -> Result<()> {
+    ctx.accounts.my_regular_account.name = name;
+    Ok(())
+}
+
+#[derive(Accounts)]
+#[instruction(name: String)]
+pub struct WithoutCompressedAccount<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(
+        init,
+        seeds = [b"regular".as_slice(), name.as_bytes()],
+        bump,
+        payer = signer,
+        space = 8 + 32,
+    )]
+    pub my_regular_account: Account<'info, MyRegularAccount>,
+    pub system_program: Program<'info, System>,
+}
+```
+
+## Building and Deploying
+
+<Steps>
+
+### Build the Program
+
+Build your program to SBF:
+
+```bash
+anchor build
+```
+
+### Start Local Test Validator
+
+Start the Light test validator with all required services:
+
+```bash
+light test-validator
+```
+
+This starts:
+- Solana test validator
+- Prover server (port 3001)
+- Photon indexer (port 8784)
+- Light Protocol programs
+
+### Deploy Your Program
+
+Deploy to the local test validator:
+
+```bash
+anchor deploy
+```
+
+### Update Program ID
+
+Copy the deployed program ID and update:
+
+1. `declare_id!()` in `lib.rs`
+2. `LIGHT_CPI_SIGNER` derivation
+3. `Anchor.toml` program addresses
+
+</Steps>
+
+## Client Integration
+
+Build a TypeScript client to interact with your program:
+
+```typescript Client Example
+import * as anchor from "@coral-xyz/anchor";
+import {
+  bn,
+  createRpc,
+  deriveAddress,
+  deriveAddressSeed,
+  PackedAccounts,
+  SystemAccountMetaConfig,
+  sleep,
+} from "@lightprotocol/stateless.js";
+import { Keypair } from "@solana/web3.js";
+
+const provider = anchor.AnchorProvider.env();
+anchor.setProvider(provider);
+
+const program = anchor.workspace.myCompressedApp;
+const rpc = createRpc(
+  "http://127.0.0.1:8899",
+  "http://127.0.0.1:8784",
+  "http://127.0.0.1:3001"
+);
+
+const signer = Keypair.generate();
+await rpc.requestAirdrop(signer.publicKey, 1e9);
+await sleep(2000);
+
+// Get tree info
+const treeInfos = await rpc.getStateTreeInfos();
+const stateTreeInfo = treeInfos.find(info => info.treeType === 2);
+const outputQueue = stateTreeInfo.queue;
+
+const addressTreeInfo = await rpc.getAddressTreeInfoV2();
+const addressTree = addressTreeInfo.tree;
+
+// Derive address
+const name = "test-account";
+const accountSeed = new TextEncoder().encode("compressed");
+const nameSeed = new TextEncoder().encode(name);
+const seed = deriveAddressSeed(
+  [accountSeed, nameSeed],
+  program.programId
+);
+const address = deriveAddress(seed, addressTree, program.programId);
+
+// Get validity proof
+const proofRpcResult = await rpc.getValidityProofV0(
+  [],
+  [{
+    tree: addressTree,
+    queue: addressTree,
+    address: bn(address.toBytes()),
+  }]
+);
+
+// Build remaining accounts
+const systemAccountConfig = SystemAccountMetaConfig.new(program.programId);
+let remainingAccounts = PackedAccounts.newWithSystemAccountsV2(systemAccountConfig);
+
+const addressMerkleTreePubkeyIndex = remainingAccounts.insertOrGet(addressTree);
+const outputMerkleTreeIndex = remainingAccounts.insertOrGet(outputQueue);
+
+const packedAddressTreeInfo = {
+  addressMerkleTreePubkeyIndex,
+  addressQueuePubkeyIndex: addressMerkleTreePubkeyIndex,
+  rootIndex: proofRpcResult.rootIndices[0],
+};
+
+let proof = {
+  0: proofRpcResult.compressedProof,
+};
+
+// Create transaction
+let tx = await program.methods
+  .createCompressedAccountV2(
+    proof,
+    packedAddressTreeInfo,
+    outputMerkleTreeIndex,
+    name
+  )
+  .accounts({
+    signer: signer.publicKey,
+  })
+  .remainingAccounts(remainingAccounts.toAccountMetas().remainingAccounts)
+  .signers([signer])
+  .transaction();
+
+tx.recentBlockhash = (await rpc.getRecentBlockhash()).blockhash;
+tx.sign(signer);
+
+const sig = await rpc.sendTransaction(tx, [signer]);
+await rpc.confirmTransaction(sig);
+
+console.log("Created compressed account:", sig);
+
+// Query the account
+const compressedAccount = await rpc.getCompressedAccount(bn(address.toBytes()));
+console.log("Account data:", compressedAccount);
+```
+
+## Testing Strategies
+
+See the [Testing Guide](/guides/testing) for comprehensive testing patterns.
+
+Quick example using `light-program-test`:
+
+```rust Test
+use light_program_test::{LightProgramTest, ProgramTestConfig};
+use solana_sdk::signer::Signer;
+
+#[tokio::test]
+async fn test_create_account() {
+    let config = ProgramTestConfig::new_v2(
+        true, // with prover
+        Some(vec![("my_compressed_app", my_compressed_app::ID)])
+    );
+    let mut rpc = LightProgramTest::new(config).await.unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Your test code here
+}
+```
+
+## Best Practices
+
+<Steps>
+
+### Use Instruction Decoder
+
+Always add the `#[instruction_decoder]` macro:
+
+```rust
+#[instruction_decoder]
+#[program]
+pub mod my_program {
+    // ...
+}
+```
+
+### Validate Account Ownership
+
+Check that accounts belong to the correct owner:
+
+```rust
+require_keys_eq!(
+    my_account.owner,
+    ctx.accounts.signer.key(),
+    ErrorCode::Unauthorized
+);
+```
+
+### Handle Both V1 and V2
+
+Support both tree versions for compatibility:
+
+```rust
+pub fn create_compressed_account<'info>(...) -> Result<()> {
+    // V1 implementation
+}
+
+pub fn create_compressed_account_v2<'info>(...) -> Result<()> {
+    // V2 implementation
+}
+```
+
+### Minimize Compute Units
+
+Use compute budget instructions for complex operations:
+
+```rust
+let compute_budget_ix = ComputeBudgetProgram::setComputeUnitLimit({
+    units: 1000000,
+});
+
+tx.preInstructions([compute_budget_ix]);
+```
+
+</Steps>
+
+## Common Patterns
+
+### Token-Gated Compressed Accounts
+
+```rust Token Gate
+use light_token_interface::state::Token;
+use borsh::BorshDeserialize;
+
+pub fn create_token_gated_account<'info>(
+    ctx: Context<'_, '_, '_, 'info, TokenGated<'info>>,
+    proof: ValidityProof,
+    // ... other params
+) -> Result<()> {
+    // Verify token ownership
+    let token_account = ctx.accounts.token_account.data.borrow();
+    let token = Token::deserialize(&mut &token_account[..])?;
+    
+    require!(
+        token.amount >= MINIMUM_TOKENS,
+        ErrorCode::InsufficientTokens
+    );
+    
+    // Create compressed account
+    // ...
+}
+```
+
+### Escrow Pattern
+
+```rust Escrow
+#[derive(Clone, Debug, Default, LightDiscriminator, BorshSerialize, BorshDeserialize)]
+pub struct Escrow {
+    pub depositor: Pubkey,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub expiry: i64,
+}
+
+pub fn create_escrow<'info>(
+    ctx: Context<'_, '_, '_, 'info, CreateEscrow<'info>>,
+    // ... params
+) -> Result<()> {
+    let mut escrow = LightAccount::<Escrow>::new_init(
+        &crate::ID,
+        Some(address),
+        output_tree_index,
+    );
+    
+    escrow.depositor = ctx.accounts.depositor.key();
+    escrow.recipient = recipient;
+    escrow.amount = amount;
+    escrow.expiry = Clock::get()?.unix_timestamp + duration;
+    
+    // Invoke CPI
+    // ...
+}
+
+pub fn claim_escrow<'info>(
+    ctx: Context<'_, '_, '_, 'info, ClaimEscrow<'info>>,
+    escrow_data: Escrow,
+    account_meta: CompressedAccountMeta,
+) -> Result<()> {
+    require_keys_eq!(
+        escrow_data.recipient,
+        ctx.accounts.recipient.key(),
+        ErrorCode::Unauthorized
+    );
+    
+    require!(
+        Clock::get()?.unix_timestamp >= escrow_data.expiry,
+        ErrorCode::EscrowNotExpired
+    );
+    
+    // Close escrow and transfer funds
+    // ...
+}
+```
+
+## Debugging
+
+Enable detailed logging:
+
+```bash
+RUST_BACKTRACE=1 RUST_LOG=debug anchor test -- --nocapture
+```
+
+View transaction logs:
+
+```rust
+msg!("Account address: {:?}", address);
+msg!("Tree index: {}", output_tree_index);
+```
+
+Check indexer status:
+
+```bash
+curl http://localhost:8784/v1/health
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Testing Guide" icon="flask" href="/guides/testing">
+  Learn comprehensive testing strategies
+</Card>
+
+<Card title="Rust SDK Reference" icon="book" href="/sdk/rust/overview">
+  Explore the complete SDK documentation
+</Card>
+
+<Card title="Program Examples" icon="github" href="https://github.com/Lightprotocol/program-examples">
+  View complete example programs
+</Card>
+
+<Card title="CLI Reference" icon="terminal" href="/cli/overview">
+  Learn CLI commands for development
+</Card>
+
+</CardGroup>
+
+## Resources
+
+- [SDK Anchor Test Examples](https://github.com/Lightprotocol/light-protocol/tree/main/sdk-tests/sdk-anchor-test)
+- [System CPI Tests](https://github.com/Lightprotocol/light-protocol/tree/main/program-tests/system-cpi-test)
+- [Light SDK Documentation](https://docs.rs/light-sdk)
+- [Anchor Documentation](https://www.anchor-lang.com)

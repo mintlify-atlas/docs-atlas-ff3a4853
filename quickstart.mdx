@@ -1,80 +1,371 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Build your first compressed token application in 5 minutes"
+icon: "rocket"
 ---
 
-## Get started in three steps
+## Overview
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This quickstart guide will walk you through creating a compressed token mint, minting tokens, and transferring them - all with dramatically reduced storage costs compared to standard SPL tokens.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  By the end of this guide, you'll have a working compressed token application running on a local test validator.
 </Note>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install the CLI">
+    Install the Light Protocol CLI globally:
+    
+    <CodeGroup>
+    ```bash npm
+    npm install -g @lightprotocol/zk-compression-cli
+    ```
+    
+    ```bash yarn
+    yarn global add @lightprotocol/zk-compression-cli
+    ```
+    
+    ```bash pnpm
+    pnpm add -g @lightprotocol/zk-compression-cli
+    ```
+    </CodeGroup>
+    
+    Verify installation:
+    ```bash
+    light --version
+    ```
+  </Step>
+  
+  <Step title="Create Project Directory">
+    Set up a new Node.js project:
+    
+    ```bash
+    mkdir my-compressed-app
+    cd my-compressed-app
+    npm init -y
+    ```
+  </Step>
+  
+  <Step title="Install Dependencies">
+    Install the Light Protocol SDKs:
+    
+    ```bash
+    npm install @lightprotocol/stateless.js @lightprotocol/compressed-token @solana/web3.js @solana/spl-token
+    ```
+  </Step>
+</Steps>
+
+## Start Test Validator
+
+Open a new terminal and start the Light Protocol test validator:
+
+```bash
+light test-validator
+```
+
+<Info>
+  Keep this terminal running. The validator includes all Light Protocol programs pre-deployed and a local ZK prover service.
+</Info>
+
+The test validator provides:
+- All Light Protocol programs (Account Compression, System, Compressed Token, Registry)
+- Local ZK Prover at `http://127.0.0.1:3001`
+- Local Photon Indexer at `http://127.0.0.1:8784`
+- Solana RPC at `http://127.0.0.1:8899`
+
+## Create Your Application
+
+Create a new file `index.ts`:
+
+```typescript index.ts
+import {
+  LightSystemProgram,
+  Rpc,
+  confirmTx,
+  createRpc,
+} from '@lightprotocol/stateless.js';
+import { createMint, mintTo, transfer } from '@lightprotocol/compressed-token';
+import { Keypair, Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';
+
+async function main() {
+  // Initialize connection and RPC
+  const connection = new Connection('http://127.0.0.1:8899', 'confirmed');
+  const rpc: Rpc = createRpc(
+    'http://127.0.0.1:8899',
+    'http://127.0.0.1:8784',
+    'http://127.0.0.1:3001'
+  );
+
+  // Generate keypairs
+  const payer = Keypair.generate();
+  const mintAuthority = Keypair.generate();
+  const tokenRecipient = Keypair.generate();
+
+  console.log('Payer:', payer.publicKey.toBase58());
+  console.log('Mint Authority:', mintAuthority.publicKey.toBase58());
+  console.log('Recipient:', tokenRecipient.publicKey.toBase58());
+
+  // Airdrop SOL to payer
+  console.log('\n1. Requesting airdrop...');
+  const airdropSignature = await connection.requestAirdrop(
+    payer.publicKey,
+    2 * LAMPORTS_PER_SOL
+  );
+  await confirmTx(connection, airdropSignature);
+  console.log('   ✓ Airdrop confirmed');
+
+  // Create compressed token mint
+  console.log('\n2. Creating compressed token mint...');
+  const { mint, transactionSignature } = await createMint(
+    rpc,
+    payer,
+    mintAuthority.publicKey,
+    9 // 9 decimals
+  );
+  console.log('   Mint:', mint.toBase58());
+  console.log('   Tx:', transactionSignature);
+
+  // Mint tokens to recipient
+  console.log('\n3. Minting 1000 tokens...');
+  const mintToSignature = await mintTo(
+    rpc,
+    payer,
+    mint,
+    tokenRecipient.publicKey,
+    mintAuthority,
+    1000e9 // 1000 tokens with 9 decimals
+  );
+  console.log('   Tx:', mintToSignature);
+
+  // Check recipient balance
+  console.log('\n4. Checking balance...');
+  const balance = await rpc.getCompressedTokenBalance(
+    tokenRecipient.publicKey,
+    mint
+  );
+  console.log('   Balance:', balance, 'tokens');
+
+  // Transfer tokens
+  console.log('\n5. Transferring 250 tokens...');
+  const newRecipient = Keypair.generate();
+  const transferSignature = await transfer(
+    rpc,
+    payer,
+    mint,
+    250e9, // 250 tokens
+    tokenRecipient,
+    newRecipient.publicKey
+  );
+  console.log('   Tx:', transferSignature);
+
+  // Check balances after transfer
+  const balance1 = await rpc.getCompressedTokenBalance(
+    tokenRecipient.publicKey,
+    mint
+  );
+  const balance2 = await rpc.getCompressedTokenBalance(
+    newRecipient.publicKey,
+    mint
+  );
+  console.log('\n6. Final balances:');
+  console.log('   Original recipient:', balance1, 'tokens');
+  console.log('   New recipient:', balance2, 'tokens');
+
+  console.log('\n✓ Quickstart complete!');
+}
+
+main().catch(console.error);
+```
+
+## Run the Application
+
+Execute your script:
+
+```bash
+npx tsx index.ts
+```
+
+You should see output like:
+
+```
+Payer: 7xX8...Abc
+Mint Authority: 9zZ9...Def
+Recipient: 5yY5...Ghi
+
+1. Requesting airdrop...
+   ✓ Airdrop confirmed
+
+2. Creating compressed token mint...
+   Mint: 3wW3...Jkl
+   Tx: 2vV2...Mno
+
+3. Minting 1000 tokens...
+   Tx: 4uU4...Pqr
+
+4. Checking balance...
+   Balance: 1000 tokens
+
+5. Transferring 250 tokens...
+   Tx: 6tT6...Stu
+
+6. Final balances:
+   Original recipient: 750 tokens
+   New recipient: 250 tokens
+
+✓ Quickstart complete!
+```
+
+<Check>
+  Congratulations! You've successfully created and used compressed tokens on Solana.
+</Check>
+
+## What Just Happened?
+
+Let's break down what your application did:
+
+<AccordionGroup>
+  <Accordion title="Created a Compressed Mint" icon="coins">
+    Instead of creating a regular SPL Token mint (which costs rent), you created a **compressed mint** that stores only a small fingerprint on-chain. The full mint data is stored in the cheaper Solana ledger space.
+    
+    **Cost Savings**: ~99.8% reduction compared to SPL Token
+  </Accordion>
+  
+  <Accordion title="Minted Compressed Tokens" icon="money-bill">
+    The `mintTo` function created compressed token accounts stored in Merkle trees. These accounts:
+    - Have no rent burden
+    - Are fully composable with other programs
+    - Support standard SPL Token operations
+  </Accordion>
+  
+  <Accordion title="Transferred Tokens" icon="arrow-right-arrow-left">
+    The `transfer` function:
+    1. Generated a zero-knowledge proof of account ownership
+    2. Nullified the old account state in the tree
+    3. Created new account states for sender and recipient
+    4. Updated the Merkle tree roots on-chain
+    
+    All verified by Groth16 SNARKs for security.
+  </Accordion>
+  
+  <Accordion title="Queried Balances" icon="magnifying-glass">
+    The `getCompressedTokenBalance` RPC method queried the Photon indexer, which:
+    - Indexes all compressed account state
+    - Provides fast queries by owner/mint
+    - Maintains Merkle proofs for transactions
+  </Accordion>
+</AccordionGroup>
+
+## Cost Comparison
+
+Here's what you saved compared to regular SPL tokens:
+
+| Operation | SPL Token | Compressed Token | Savings |
+|-----------|-----------|------------------|---------|
+| Create Mint | 0.00144 SOL | 0.000005 SOL | 99.7% |
+| Create Account | 0.00203 SOL | 0.000005 SOL | 99.8% |
+| Mint Tokens | 0.000005 SOL | 0.000005 SOL | 0% |
+| Transfer | 0.000005 SOL | ~0.00002 SOL | -300% |
+
+<Note>
+  Transfers are slightly more expensive due to ZK proof verification, but the overall savings on account creation far outweigh this cost.
+</Note>
+
+## Using the CLI
+
+You can also use the CLI for quick operations:
+
+<CodeGroup>
+```bash Create Mint
+light create-mint --decimals 9 --mint-authority <PUBKEY>
+```
+
+```bash Mint Tokens
+light mint-to --mint <MINT> --to <RECIPIENT> --amount 1000
+```
+
+```bash Transfer
+light transfer --mint <MINT> --to <RECIPIENT> --amount 250
+```
+
+```bash Check Balance
+light token-balance --mint <MINT> --owner <OWNER>
+```
+</CodeGroup>
+
+## Next Steps
+
+Now that you've built your first compressed token app, explore more advanced features:
+
+<CardGroup cols={2}>
+  <Card title="Compressed Tokens Guide" icon="wallet" href="/guides/compressed-tokens">
+    Learn about batch operations, delegation, and Token-2022 extensions
+  </Card>
+  <Card title="Compressed PDAs" icon="cube" href="/guides/compressed-pdas">
+    Build custom programs with compressed state
+  </Card>
+  <Card title="JavaScript SDK" icon="js" href="/sdk/stateless-js/overview">
+    Explore the full SDK API
+  </Card>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Write tests for your compressed applications
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Test validator fails to start" icon="server">
+    Make sure no other Solana validator is running:
+    
+    ```bash
+    killall solana-test-validator
+    light test-validator
+    ```
+  </Accordion>
+  
+  <Accordion title="Airdrop fails" icon="triangle-exclamation">
+    The local validator may be slow to start. Wait 10 seconds and try again, or check if the validator is running:
+    
+    ```bash
+    solana cluster-version
+    ```
+  </Accordion>
+  
+  <Accordion title="Import errors" icon="code">
+    Ensure you're using TypeScript with `tsx` or compile first:
+    
+    ```bash
+    npm install -D tsx typescript @types/node
+    npx tsx index.ts
+    ```
+  </Accordion>
+  
+  <Accordion title="RPC connection errors" icon="wifi">
+    Verify the test validator is running and the endpoints are correct:
+    
+    - Solana RPC: `http://127.0.0.1:8899`
+    - Photon Indexer: `http://127.0.0.1:8784`
+    - ZK Prover: `http://127.0.0.1:3001`
+  </Accordion>
+</AccordionGroup>
+
+## Example Projects
+
+Check out complete example projects:
+
+<CardGroup cols={2}>
+  <Card title="Node.js Client" icon="node" href="https://github.com/Lightprotocol/example-nodejs-client">
+    Complete Node.js example with compressed tokens
+  </Card>
+  <Card title="Web Client" icon="browser" href="https://github.com/Lightprotocol/example-web-client">
+    React web application example
+  </Card>
+  <Card title="Program Examples" icon="rust" href="https://github.com/Lightprotocol/program-examples">
+    Solana program integration examples
+  </Card>
+  <Card title="GitHub Repo" icon="github" href="https://github.com/Lightprotocol/light-protocol">
+    Main Light Protocol repository
+  </Card>
+</CardGroup>

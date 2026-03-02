@@ -1,0 +1,436 @@
+---
+title: "Circuit Implementation Details"
+description: "Deep dive into Light Protocol's zero-knowledge circuits and their parameters"
+---
+
+Light Protocol's ZK circuits are implemented using Gnark, a Go-based framework for building zero-knowledge proof systems. The circuits use the Groth16 proving system over the BN254 elliptic curve.
+
+## Circuit Architecture
+
+All circuits follow a common pattern:
+
+<Steps>
+  <Step title="Public Input Hash">
+    All public inputs are hashed into a single field element using Poseidon hash
+  </Step>
+  <Step title="Private Witness">
+    Circuit inputs include private witness data (Merkle proofs, leaves, etc.)
+  </Step>
+  <Step title="Constraint System">
+    Circuit constraints verify the correctness of state transitions
+  </Step>
+  <Step title="Output Verification">
+    On-chain verifier checks the proof against the public input hash
+  </Step>
+</Steps>
+
+## Batch Append Circuit
+
+Appends new leaves to state Merkle trees, used for processing output queues.
+
+### Circuit Structure
+
+```go
+type BatchAppendCircuit struct {
+    PublicInputHash     frontend.Variable `gnark:",public"`
+    OldRoot             frontend.Variable `gnark:",secret"`
+    NewRoot             frontend.Variable `gnark:",secret"`
+    LeavesHashchainHash frontend.Variable `gnark:",secret"`
+    StartIndex          frontend.Variable `gnark:",secret"`
+    
+    OldLeaves    []frontend.Variable   `gnark:",secret"`
+    Leaves       []frontend.Variable   `gnark:",secret"`
+    MerkleProofs [][]frontend.Variable `gnark:",secret"`
+    
+    Height    uint32
+    BatchSize uint32
+}
+```
+
+### Circuit Logic
+
+<Steps>
+  <Step title="Hash Public Inputs">
+    Compute `PublicInputHash = Poseidon(OldRoot, NewRoot, LeavesHashchainHash, StartIndex)`
+  </Step>
+  <Step title="Verify Leaves Hash">
+    Confirm `LeavesHashchainHash = Poseidon(Leaves[0], Leaves[1], ..., Leaves[n])`
+  </Step>
+  <Step title="Process Each Leaf">
+    For each leaf in the batch:
+    - If `OldLeaves[i] == 0`: Insert new leaf
+    - If `OldLeaves[i] != 0`: Keep old leaf (already nullified)
+  </Step>
+  <Step title="Update Merkle Root">
+    Iteratively update root using Merkle proofs for each leaf insertion
+  </Step>
+  <Step title="Verify Final Root">
+    Assert computed root equals `NewRoot`
+  </Step>
+</Steps>
+
+### Input Format
+
+```json
+{
+  "oldRoot": "12345...",
+  "newRoot": "67890...",
+  "leavesHashchainHash": "11111...",
+  "startIndex": 1000,
+  "leaves": [
+    "leaf_hash_1",
+    "leaf_hash_2",
+    ...
+  ],
+  "oldLeaves": [
+    "0",
+    "nullifier_hash",
+    ...
+  ],
+  "merkleProofs": [
+    ["proof_0_0", "proof_0_1", ..., "proof_0_25"],
+    ["proof_1_0", "proof_1_1", ..., "proof_1_25"],
+    ...
+  ],
+  "height": 26,
+  "batchSize": 100
+}
+```
+
+<Info>
+**Old Leaves Semantics**: The `oldLeaves` array indicates whether a leaf slot is empty (0) or contains a nullifier. This handles the case where leaves are nullified before being appended.
+</Info>
+
+## Batch Update Circuit
+
+Nullifies existing leaves in state Merkle trees by computing nullifier hashes.
+
+### Circuit Structure
+
+```go
+type BatchUpdateCircuit struct {
+    PublicInputHash     frontend.Variable `gnark:",public"`
+    OldRoot             frontend.Variable `gnark:",secret"`
+    NewRoot             frontend.Variable `gnark:",secret"`
+    LeavesHashchainHash frontend.Variable `gnark:",secret"`
+    
+    TxHashes     []frontend.Variable   `gnark:",secret"`
+    Leaves       []frontend.Variable   `gnark:",secret"`
+    OldLeaves    []frontend.Variable   `gnark:",secret"`
+    MerkleProofs [][]frontend.Variable `gnark:",secret"`
+    PathIndices  []frontend.Variable   `gnark:",secret"`
+    
+    Height    uint32
+    BatchSize uint32
+}
+```
+
+### Circuit Logic
+
+<Steps>
+  <Step title="Compute Nullifiers">
+    For each item: `Nullifier[i] = Poseidon(Leaves[i], PathIndices[i], TxHashes[i])`
+  </Step>
+  <Step title="Verify Nullifier Hash">
+    Confirm `LeavesHashchainHash = Poseidon(Nullifier[0], Nullifier[1], ..., Nullifier[n])`
+  </Step>
+  <Step title="Update Tree">
+    For each leaf, verify Merkle proof and replace old leaf with nullifier
+  </Step>
+  <Step title="Verify Final Root">
+    Assert computed root equals `NewRoot`
+  </Step>
+</Steps>
+
+### Input Format
+
+```json
+{
+  "oldRoot": "12345...",
+  "newRoot": "67890...",
+  "leavesHashchainHash": "nullifier_chain_hash",
+  "txHashes": ["tx_hash_1", "tx_hash_2", ...],
+  "leaves": ["leaf_hash_1", "leaf_hash_2", ...],
+  "oldLeaves": ["old_leaf_1", "old_leaf_2", ...],
+  "merkleProofs": [
+    ["proof_0_0", ..., "proof_0_25"],
+    ...
+  ],
+  "pathIndices": [100, 250, 780, ...],
+  "height": 26,
+  "batchSize": 100
+}
+```
+
+<Warning>
+**Path Index Importance**: The path index is included in the nullifier hash to prevent replay attacks and ensure uniqueness even when the same leaf is spent in different positions.
+</Warning>
+
+## Batch Address Append Circuit
+
+Appends new addresses to indexed Merkle trees for address uniqueness.
+
+### Circuit Structure
+
+Similar to batch append but operates on indexed Merkle trees with low-value and high-value tracking.
+
+### Input Format
+
+```json
+{
+  "oldRoot": "12345...",
+  "newRoot": "67890...",
+  "hashchainHash": "address_chain_hash",
+  "zkpBatchSize": 100,
+  "addresses": ["addr_1", "addr_2", ...],
+  "lowElementValues": [...],
+  "lowElementIndices": [...],
+  "lowElementProofs": [...],
+  "newLowElement": [...],
+  "newLowElementProof": [...],
+  "height": 26
+}
+```
+
+## Public Input Hash Calculation
+
+The public input hash combines all public circuit inputs using Poseidon hash:
+
+### Hash Chain Algorithm
+
+```typescript
+function createHashChain(inputs: bigint[]): bigint {
+  let hash = inputs[0];
+  for (let i = 1; i < inputs.length; i++) {
+    hash = poseidon([hash, inputs[i]]);
+  }
+  return hash;
+}
+```
+
+### Example: Batch Append
+
+```typescript
+// Public inputs for batch append
+const publicInputs = [
+  oldRoot,
+  newRoot,
+  leavesHashchainHash,
+  startIndex
+];
+
+// Compute hash chain
+const publicInputHash = createHashChain(publicInputs);
+```
+
+### Example: Batch Update
+
+```typescript
+// Public inputs for batch update (3 inputs)
+const publicInputs = [
+  oldRoot,
+  newRoot,
+  leavesHashchainHash
+];
+
+const publicInputHash = createHashChain(publicInputs);
+```
+
+<Info>
+The public input hash is the single public input that the on-chain verifier checks. All other circuit parameters are private witness data.
+</Info>
+
+## Circuit Parameters
+
+### Supported Configurations
+
+| Circuit Type | Tree Heights | Batch Sizes | Use Case |
+|-------------|-------------|-------------|----------|
+| Batch Append | 26, 32 | 10, 100, 500 | State tree append |
+| Batch Update | 26, 32 | 10, 100, 500 | State tree nullify |
+| Address Append | 26, 32 | 10, 100, 500 | Address tree append |
+| Inclusion | 26 | 1-8 accounts | Merkle proofs |
+| Non-Inclusion | 26 | 1-8 accounts | Address proofs |
+
+### Circuit Naming Convention
+
+Proving key files follow this naming pattern:
+
+```
+batch_{operation}_{height}_{batch_size}.key
+```
+
+Examples:
+- `batch_update_26_100.key` - Update circuit, height 26, batch size 100
+- `batch_append_32_500.key` - Append circuit, height 32, batch size 500
+- `batch_address_append_26_100.key` - Address append, height 26, batch 100
+
+### Test Circuits
+
+Smaller test circuits for development:
+
+- `batch_update_26_10.key` - Small update batches
+- `batch_append_26_10.key` - Small append batches
+- `batch_address_append_26_10.key` - Small address batches
+
+## Constraint System
+
+### Complexity
+
+| Circuit | Batch Size | Constraints | Proof Size |
+|---------|-----------|-------------|------------|
+| Batch Append 26 | 100 | ~2.8M | 128 bytes |
+| Batch Append 26 | 500 | ~14M | 128 bytes |
+| Batch Update 26 | 100 | ~2.8M | 128 bytes |
+| Batch Update 26 | 500 | ~14M | 128 bytes |
+| Address Append 26 | 100 | ~3.2M | 128 bytes |
+
+<Info>
+All Groth16 proofs are 128 bytes (2 G1 points + 1 G2 point) regardless of circuit complexity. This makes on-chain verification extremely efficient.
+</Info>
+
+### Verification Cost
+
+On-chain verification costs (Solana compute units):
+
+- **Proof Verification**: ~30,000 CU per proof
+- **Public Input Validation**: ~5,000 CU
+- **Total per Proof**: ~35,000 CU
+
+## Poseidon Hash Function
+
+Light Protocol uses the Poseidon hash function optimized for zero-knowledge circuits.
+
+### Parameters
+
+- **Field**: BN254 scalar field
+- **Width**: 3 (for most operations)
+- **Full Rounds**: 8
+- **Partial Rounds**: 57
+- **Optimization**: Circuit-friendly (low R1CS constraints)
+
+### Usage in Circuits
+
+```go
+// Hash two values
+hash := poseidon.Poseidon2{In1: value1, In2: value2}
+
+// Hash three values (nullifier)
+nullifier := poseidon.Poseidon3{
+    In1: leaf,
+    In2: pathIndex,
+    In3: txHash,
+}
+```
+
+## Circuit Setup
+
+Circuit setup is performed once during trusted setup:
+
+<Steps>
+  <Step title="Define Circuit">
+    Implement circuit constraints using Gnark
+  </Step>
+  <Step title="Compile R1CS">
+    Generate R1CS (Rank-1 Constraint System)
+  </Step>
+  <Step title="Generate Keys">
+    Perform trusted setup to generate proving and verifying keys
+  </Step>
+  <Step title="Export Keys">
+    Save proving key (.key) and verifying key (.vkey)
+  </Step>
+  <Step title="Deploy Verifier">
+    Deploy verifying key to on-chain verifier program
+  </Step>
+</Steps>
+
+### Manual Setup Commands
+
+```bash
+# Generate R1CS
+./light-prover r1cs \
+  --circuit update \
+  --update-tree-height 26 \
+  --update-batch-size 100 \
+  --output circuit.r1cs
+
+# Perform setup
+./light-prover setup \
+  --circuit update \
+  --update-tree-height 26 \
+  --update-batch-size 100 \
+  --output proving.key \
+  --output-vkey verifying.vkey
+```
+
+## Proof Compression
+
+Proofs are compressed before transmission:
+
+### G1/G2 Point Encoding
+
+```rust
+pub struct ProofCompressed {
+    pub a: [u8; 32],  // G1 point (compressed)
+    pub b: [u8; 64],  // G2 point (compressed)
+    pub c: [u8; 32],  // G1 point (compressed)
+}
+```
+
+### Compression Process
+
+<Steps>
+  <Step title="Generate Full Proof">
+    Gnark produces proof with uncompressed G1/G2 points
+  </Step>
+  <Step title="Compress Points">
+    Convert to compressed point representation
+  </Step>
+  <Step title="Serialize">
+    Encode as 128 bytes total (32 + 64 + 32)
+  </Step>
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Input Validation" icon="check">
+    Always validate circuit inputs before proof generation:
+    - Merkle proof length matches tree height
+    - All BigInt values are within field bounds
+    - Array lengths match batch size
+  </Card>
+  
+  <Card title="Error Handling" icon="exclamation-triangle">
+    Handle constraint errors gracefully:
+    - Invalid Merkle proofs
+    - Incorrect root transitions
+    - Public input hash mismatches
+  </Card>
+  
+  <Card title="Performance" icon="gauge">
+    Optimize proof generation:
+    - Batch multiple operations together
+    - Use appropriate batch sizes
+    - Preload proving keys at startup
+  </Card>
+  
+  <Card title="Testing" icon="flask">
+    Test circuits thoroughly:
+    - Use test circuits (batch size 10)
+    - Verify edge cases (empty slots, max batch)
+    - Check constraint satisfaction
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Server Configuration" icon="server" href="/prover/server">
+    Learn how to configure and run the prover server
+  </Card>
+  <Card title="Forester Integration" icon="tree" href="/forester/overview">
+    See how circuits are used in the Forester service
+  </Card>
+</CardGroup>

@@ -1,0 +1,349 @@
+---
+title: "Photon Indexer"
+description: "Official ZK Compression indexer for querying compressed accounts and state"
+icon: "database"
+---
+
+## Overview
+
+Photon is the official ZK Compression indexer for Light Protocol, maintained by [Helius Labs](https://github.com/helius-labs/photon). It provides fast, efficient querying of compressed accounts and state on Solana.
+
+<Card title="Photon Repository" icon="github" href="https://github.com/helius-labs/photon">
+  Official Photon indexer source code and documentation
+</Card>
+
+## What is Photon?
+
+Photon is a specialized indexer that:
+
+- **Indexes compressed accounts** stored in Merkle trees
+- **Provides RPC endpoints** for querying compressed state
+- **Generates validity proofs** required for transactions
+- **Tracks Merkle tree state** including roots and leaf indices
+- **Supports both V1 and V2** protocol versions
+
+## Key Features
+
+### Fast Queries
+
+Photon indexes all compressed accounts and provides efficient query endpoints:
+
+- Query by owner
+- Query by address
+- Filter by mint (for compressed tokens)
+- Pagination support
+
+### Validity Proofs
+
+Photon generates the validity proofs needed to create transactions that interact with compressed accounts:
+
+```rust
+let proof = rpc
+    .get_validity_proof(
+        vec![account_hash],  // Account hashes to prove
+        vec![],              // New addresses (if creating)
+        None                 // Optional config
+    )
+    .await?;
+```
+
+### Merkle Tree State
+
+Photon tracks the current state of all Merkle trees:
+
+- Current root
+- Root history (for validity proofs)
+- Next available index
+- Tree capacity and rollover status
+
+## Using Photon
+
+### With Light Client
+
+The `light-client` Rust library provides a high-level interface to Photon:
+
+```rust
+use light_client::{
+    rpc::{LightClient, LightClientConfig},
+    indexer::{Indexer, IndexerRpcConfig},
+};
+
+// Connect to Photon (API key in URL)
+let mut rpc = LightClient::new(LightClientConfig::new(
+    "https://devnet.helius-rpc.com".to_string(),
+    Some("https://photon.helius.com?api-key=YOUR_KEY".to_string()),
+)).await?;
+
+// Query compressed accounts
+let accounts = rpc
+    .get_compressed_accounts_by_owner(&owner, None, None)
+    .await?;
+```
+
+### Endpoints
+
+<AccordionGroup>
+  <Accordion title="Local Development">
+    When running a local test validator with Light Protocol:
+    
+    ```
+    http://localhost:8784
+    ```
+    
+    Start with Light CLI:
+    ```bash
+    light test-validator
+    ```
+  </Accordion>
+  
+  <Accordion title="Devnet">
+    Helius provides hosted Photon for devnet:
+    
+    ```
+    https://photon-devnet.helius.com?api-key=YOUR_KEY
+    ```
+  </Accordion>
+  
+  <Accordion title="Mainnet">
+    Helius provides hosted Photon for mainnet:
+    
+    ```
+    https://photon.helius.com?api-key=YOUR_KEY
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## API Methods
+
+### Query Methods
+
+<ResponseField name="getCompressedAccountsByOwner" type="method">
+  Get all compressed accounts owned by a public key
+  
+  **Parameters:**
+  - `owner`: Public key of the account owner
+  - `cursor`: Optional pagination cursor
+  - `limit`: Optional result limit
+  
+  **Returns:** List of compressed accounts with Merkle context
+</ResponseField>
+
+<ResponseField name="getCompressedAccount" type="method">
+  Get a specific compressed account by hash
+  
+  **Parameters:**
+  - `hash`: 32-byte account hash
+  
+  **Returns:** Compressed account with Merkle context
+</ResponseField>
+
+<ResponseField name="getCompressedTokenAccountsByOwner" type="method">
+  Get compressed token accounts filtered by owner and optional mint
+  
+  **Parameters:**
+  - `owner`: Public key of the token account owner
+  - `mint`: Optional mint public key to filter by
+  - `cursor`: Optional pagination cursor
+  - `limit`: Optional result limit
+  
+  **Returns:** List of compressed token accounts
+</ResponseField>
+
+### Proof Methods
+
+<ResponseField name="getValidityProof" type="method">
+  Generate validity proof for transaction creation
+  
+  **Parameters:**
+  - `hashes`: Array of compressed account hashes to prove inclusion
+  - `newAddresses`: Array of addresses for new compressed accounts
+  
+  **Returns:** 
+  - Compressed proof (Groth16 ZK proof)
+  - Merkle tree roots
+  - Leaf indices
+  - Address tree roots (for new addresses)
+</ResponseField>
+
+### Indexer Status
+
+<ResponseField name="getIndexerHealth" type="method">
+  Check indexer health and sync status
+  
+  **Returns:**
+  - Current slot
+  - Sync status
+  - Version information
+</ResponseField>
+
+## Architecture
+
+Photon works alongside the Light Protocol on-chain programs:
+
+```
+┌─────────────────┐
+│  Solana Nodes   │
+│   (RPC + WS)    │
+└────────┬────────┘
+         │
+         │ Stream transactions
+         │
+         ▼
+┌─────────────────┐
+│     Photon      │
+│    Indexer      │
+├─────────────────┤
+│ • Parse txs     │
+│ • Index state   │
+│ • Track trees   │
+│ • Generate      │
+│   proofs        │
+└────────┬────────┘
+         │
+         │ RPC queries
+         │
+         ▼
+┌─────────────────┐
+│  Your Client    │
+│  (light-client) │
+└─────────────────┘
+```
+
+## Local Development
+
+### Using Light CLI
+
+The easiest way to run Photon locally:
+
+```bash
+# Install Light CLI
+npm install -g @lightprotocol/zk-compression-cli
+
+# Start validator with Photon
+light test-validator
+```
+
+This starts:
+- Solana test validator
+- Light Protocol programs
+- Photon indexer (port 8784)
+- Prover service
+
+### With Rust Test Code
+
+```rust
+use light_client::local_test_validator::{
+    spawn_validator,
+    LightValidatorConfig,
+};
+
+#[tokio::test]
+async fn test_with_photon() {
+    let config = LightValidatorConfig {
+        enable_indexer: true,
+        enable_prover: true,
+        wait_time: 75,
+        ..Default::default()
+    };
+    
+    spawn_validator(config).await;
+    
+    // Photon now available at http://localhost:8784
+}
+```
+
+## Configuration
+
+### Environment Variables
+
+When running your own Photon instance:
+
+<ParamField path="DATABASE_URL" type="string" required>
+  PostgreSQL connection string for state storage
+</ParamField>
+
+<ParamField path="RPC_URL" type="string" required>
+  Solana RPC endpoint to index from
+</ParamField>
+
+<ParamField path="WS_RPC_URL" type="string" required>
+  Solana WebSocket endpoint for real-time updates
+</ParamField>
+
+<ParamField path="PHOTON_LISTEN_ADDRESS" type="string">
+  Address and port for Photon RPC server (default: `0.0.0.0:8784`)
+</ParamField>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Use Indexed Data for UI">
+    Query Photon for displaying compressed accounts in your UI. Don't try to reconstruct state from on-chain Merkle trees directly.
+  </Accordion>
+  
+  <Accordion title="Cache Validity Proofs">
+    Validity proofs are tied to specific Merkle roots. Cache them for the current slot to avoid repeated queries.
+  </Accordion>
+  
+  <Accordion title="Handle Tree Rollovers">
+    When a Merkle tree reaches capacity, it rolls over to a new tree. Photon handles this automatically, but your code should handle the rollover event.
+  </Accordion>
+  
+  <Accordion title="Monitor Indexer Health">
+    Periodically check `getIndexerHealth` to ensure Photon is synced with the latest slot.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Photon GitHub" icon="github" href="https://github.com/helius-labs/photon">
+    Official repository and documentation
+  </Card>
+  
+  <Card title="Light Client API" icon="code" href="/sdk/rust/sdk-libs">
+    Rust client library documentation
+  </Card>
+  
+  <Card title="Helius RPC" icon="server" href="https://docs.helius.dev">
+    Get API keys for hosted Photon
+  </Card>
+  
+  <Card title="Light Protocol Docs" icon="book" href="https://www.zkcompression.com">
+    Complete protocol documentation
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Indexer Not Syncing">
+    **Problem:** Photon is not returning recent compressed accounts.
+    
+    **Solution:**
+    - Check `getIndexerHealth` to see current slot
+    - Verify Solana RPC connection
+    - Check database connectivity
+    - Review Photon logs for errors
+  </Accordion>
+  
+  <Accordion title="Validity Proof Failures">
+    **Problem:** Transactions fail with "Invalid proof" errors.
+    
+    **Solution:**
+    - Ensure proof is for correct Merkle root
+    - Check that compressed accounts haven't been spent
+    - Verify tree hasn't rolled over since proof generation
+    - Use fresh validity proofs (don't cache across slots)
+  </Accordion>
+  
+  <Accordion title="Missing Accounts">
+    **Problem:** Compressed accounts not appearing in queries.
+    
+    **Solution:**
+    - Wait for indexer to sync (check slot)
+    - Verify transaction confirmed on-chain
+    - Check query parameters (owner, mint, cursor)
+    - Confirm account wasn't already spent/nullified
+  </Accordion>
+</AccordionGroup>

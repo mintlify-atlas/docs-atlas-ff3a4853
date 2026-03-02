@@ -1,0 +1,157 @@
+---
+title: "ZK Prover Overview"
+description: "Architecture and components of Light Protocol's zero-knowledge proof generation system"
+---
+
+The Light Protocol ZK Prover is a high-performance proof generation service built with Gnark that produces zero-knowledge proofs for compressed state transitions on Solana. The prover implements multiple circuit types to support different Merkle tree operations.
+
+## Architecture
+
+The prover system consists of three main components:
+
+<CardGroup cols={3}>
+  <Card title="Prover Server" icon="server">
+    Go-based HTTP server that generates ZK proofs using Gnark circuits
+  </Card>
+  <Card title="Prover Client" icon="plug">
+    Rust client library for submitting proof requests and polling for results
+  </Card>
+  <Card title="Proving Keys" icon="key">
+    Pre-computed circuit parameters downloaded on-demand or at startup
+  </Card>
+</CardGroup>
+
+## Circuit Types
+
+The prover supports multiple circuit types for different operations:
+
+### State Tree Circuits (V2)
+
+**Batch Append Circuit**
+Appends new leaves to state Merkle trees in batches. Used when processing output queue items that represent newly created compressed accounts.
+
+- **Purpose**: Batch insertion of new leaves into state trees
+- **Tree Height**: 26 or 32
+- **Batch Size**: Up to 500 items per proof
+- **Circuit Name**: `batch_append_{height}_{batch_size}`
+
+**Batch Update Circuit** 
+Nullifies existing leaves in state Merkle trees by replacing them with nullifier hashes. Used when processing input queue items that represent spent compressed accounts.
+
+- **Purpose**: Batch nullification of existing leaves
+- **Tree Height**: 26 or 32  
+- **Batch Size**: Up to 500 items per proof
+- **Circuit Name**: `batch_update_{height}_{batch_size}`
+
+### Address Tree Circuits (V2)
+
+**Batch Address Append Circuit**
+Appends new addresses to indexed Merkle trees. Used when creating new compressed accounts that need unique addresses.
+
+- **Purpose**: Batch insertion into indexed address trees
+- **Tree Height**: 26 or 32
+- **Batch Size**: Up to 500 items per proof  
+- **Circuit Name**: `batch_address_append_{height}_{batch_size}`
+
+### Merkle Proof Circuits (V1)
+
+**Inclusion Circuit**
+Proves that specific leaves exist in a Merkle tree at a given root.
+
+- **Purpose**: Prove account existence
+- **Tree Height**: Configurable (typically 26)
+- **Accounts**: 1-8 accounts per proof
+
+**Non-Inclusion Circuit**
+Proves that specific values do not exist in an indexed Merkle tree.
+
+- **Purpose**: Prove address uniqueness
+- **Tree Height**: Configurable (typically 26)
+- **Accounts**: 1-8 accounts per proof
+
+**Combined Circuit**
+Combines inclusion and non-inclusion proofs in a single proof.
+
+- **Purpose**: Prove both existence and non-existence
+- **Accounts**: Multiple accounts per proof
+
+## Proof Generation Flow
+
+<Steps>
+  <Step title="Submit Proof Request">
+    Client sends circuit inputs as JSON to the prover server via HTTP POST to `/prove`
+  </Step>
+  <Step title="Queue or Process">
+    Server either returns proof immediately (small circuits) or queues the job and returns a job ID
+  </Step>
+  <Step title="Generate Proof">
+    Prover loads the appropriate circuit and proving keys, then generates the ZK proof using Gnark
+  </Step>
+  <Step title="Poll for Results">
+    For queued jobs, client polls `/prove/status?job_id={id}` until proof is ready
+  </Step>
+  <Step title="Return Compressed Proof">
+    Server returns the proof in compressed format (G1/G2 points) ready for on-chain verification
+  </Step>
+</Steps>
+
+## Key Management
+
+The prover uses a lazy loading system for circuit proving keys:
+
+- **On-Demand Download**: Keys are downloaded from a CDN when first needed
+- **Local Cache**: Keys are cached in `./proving-keys/` directory
+- **Preloading**: Keys can be preloaded at startup for specific run modes
+- **Run Modes**: `local-rpc`, `rpc`, `forester`, `forester-test`, `full`, `full-test`
+
+<Info>
+Proving keys are large files (GB-sized) that contain pre-computed parameters for the circuits. The prover can automatically download missing keys or you can manually download them using the `download` command.
+</Info>
+
+## Performance Characteristics
+
+### Proof Generation Time
+
+| Circuit Type | Batch Size | Typical Time | Memory |
+|-------------|-----------|-------------|--------|
+| Batch Append 26 | 100 | ~2-5s | ~4GB |
+| Batch Append 26 | 500 | ~8-15s | ~8GB |
+| Batch Update 26 | 100 | ~2-5s | ~4GB |
+| Batch Update 26 | 500 | ~8-15s | ~8GB |
+| Address Append 26 | 100 | ~3-6s | ~4GB |
+| Inclusion 26 | 4 accounts | ~1-3s | ~2GB |
+
+<Warning>
+Proof generation is CPU and memory intensive. For production use, deploy on machines with:
+- 16+ CPU cores
+- 32+ GB RAM
+- Fast SSD storage for key files
+</Warning>
+
+## Redis Queue Mode
+
+The prover supports Redis-backed job queuing for distributed proof generation:
+
+```bash
+# Start prover with Redis queue
+light-prover start \
+  --redis-url redis://localhost:6379 \
+  --keys-dir ./proving-keys/ \
+  --prover-address 0.0.0.0:3001
+```
+
+Queue workers process different circuit types in parallel:
+- **Update Worker**: Processes batch update (nullify) requests
+- **Append Worker**: Processes batch append requests  
+- **Address Append Worker**: Processes address append requests
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running the Server" icon="play" href="/prover/server">
+    Learn how to start and configure the prover server
+  </Card>
+  <Card title="Circuit Details" icon="microchip" href="/prover/circuits">
+    Deep dive into circuit implementations and parameters
+  </Card>
+</CardGroup>

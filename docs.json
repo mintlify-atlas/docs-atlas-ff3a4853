@@ -1,122 +1,150 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Light Protocol",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#9945FF",
+    "light": "#14F195",
+    "dark": "#9945FF"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Lightprotocol/light-protocol"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Lightprotocol/light-protocol",
+      "discord": "https://discord.gg/WDAAaX6je2",
+      "x": "https://x.com/lightprotocol"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/zk-compression",
+              "concepts/architecture",
+              "concepts/compressed-accounts",
+              "concepts/merkle-trees",
+              "concepts/state-trees"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Building with Light",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/compressed-tokens",
+              "guides/compressed-pdas",
+              "guides/custom-programs",
+              "guides/testing"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "JavaScript SDK",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "sdk/stateless-js/overview",
+              "sdk/stateless-js/compressed-accounts",
+              "sdk/stateless-js/rpc-methods",
+              "sdk/compressed-token/overview",
+              "sdk/compressed-token/token-operations"
+            ]
+          },
+          {
+            "group": "Rust SDK",
+            "pages": [
+              "sdk/rust/overview",
+              "sdk/rust/sdk-libs",
+              "sdk/rust/program-integration"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "CLI Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "CLI",
             "pages": [
-              "api-reference/introduction"
+              "cli/overview",
+              "cli/test-validator",
+              "cli/commands"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Protocol Reference",
+        "groups": [
+          {
+            "group": "On-Chain Programs",
+            "pages": [
+              "programs/overview",
+              "programs/account-compression",
+              "programs/system",
+              "programs/compressed-token",
+              "programs/registry"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "ZK Prover",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "prover/overview",
+              "prover/server",
+              "prover/circuits"
+            ]
+          },
+          {
+            "group": "Forester Service",
+            "pages": [
+              "forester/overview",
+              "forester/running",
+              "forester/queue-management"
+            ]
+          },
+          {
+            "group": "Indexer",
+            "pages": [
+              "indexer/photon-overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Program Libraries",
+            "pages": [
+              "api/program-libs/account-checks",
+              "api/program-libs/batched-merkle-tree",
+              "api/program-libs/compressed-account",
+              "api/program-libs/hasher",
+              "api/program-libs/verifier"
+            ]
+          },
+          {
+            "group": "Program Instructions",
+            "pages": [
+              "api/instructions/compressed-token",
+              "api/instructions/system-program",
+              "api/instructions/account-compression"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

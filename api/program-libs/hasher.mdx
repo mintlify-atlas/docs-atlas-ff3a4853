@@ -1,0 +1,478 @@
+---
+title: "hasher"
+description: "Generic hash function trait and implementations for Solana programs"
+icon: "hashtag"
+---
+
+## Overview
+
+The `light-hasher` crate provides a generic `Hasher` trait for hash function usage on Solana, with implementations for Poseidon, Keccak-256, and SHA-256. It's designed for use in Solana programs where compute budget is critical.
+
+**Crate:** `light-hasher`  
+**Location:** `program-libs/hasher/`  
+**Primary Hash:** Poseidon over BN254
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Generic Interface" icon="layer-group">
+    Trait-based design allows swapping hash functions
+  </Card>
+  <Card title="Poseidon" icon="atom">
+    ZK-friendly hash used throughout Light Protocol
+  </Card>
+  <Card title="Zero Bytes" icon="0">
+    Precomputed zero-leaf hashes per hasher
+  </Card>
+  <Card title="Field Size" icon="ruler">
+    Utilities for BN254 field size truncation
+  </Card>
+</CardGroup>
+
+## Hasher Trait
+
+### Definition
+
+```rust
+pub trait Hasher {
+    /// Unique identifier for this hasher
+    const ID: u8;
+    
+    /// Hash a single byte slice
+    fn hash(val: &[u8]) -> Result<Hash, HasherError>;
+    
+    /// Hash multiple byte slices (variable args)
+    fn hashv(vals: &[&[u8]]) -> Result<Hash, HasherError>;
+    
+    /// Get precomputed zero bytes for this hasher
+    fn zero_bytes() -> ZeroBytes;
+    
+    /// Get zero-indexed leaf value
+    fn zero_indexed_leaf() -> [u8; 32];
+}
+
+pub type Hash = [u8; 32];
+```
+
+### Implementations
+
+<ResponseField name="Poseidon" type="hasher">
+  **ID:** 0  
+  **Algorithm:** Poseidon hash over BN254 scalar field  
+  **Use case:** Primary hash for Light Protocol (ZK-friendly)  
+  **Syscall:** `sol_poseidon` (via syscall interface)
+</ResponseField>
+
+<ResponseField name="Keccak" type="hasher">
+  **ID:** 1  
+  **Algorithm:** Keccak-256  
+  **Use case:** Ethereum compatibility, general hashing  
+  **Syscall:** `sol_keccak256`
+</ResponseField>
+
+<ResponseField name="Sha256" type="hasher">
+  **ID:** 2  
+  **Algorithm:** SHA-256  
+  **Use case:** Legacy support, verifiable computation  
+  **Syscall:** `sol_sha256`
+</ResponseField>
+
+## Poseidon Hash
+
+### Overview
+
+Poseidon is a ZK-friendly hash function optimized for use in zero-knowledge proof systems:
+
+- **Field:** BN254 scalar field
+- **Width:** 2-16 (for 1-15 inputs)
+- **Rounds:** Optimized for security and efficiency
+- **Circuit-efficient:** Few constraints in ZK proofs
+
+### Basic Usage
+
+```rust
+use light_hasher::{Poseidon, Hasher};
+
+// Hash single value
+let hash = Poseidon::hash(b"hello")?;
+
+// Hash multiple values
+let hash = Poseidon::hashv(&[
+    b"value1",
+    b"value2",
+    &[42u8; 32],
+])?;
+
+// Hash with type conversion
+let owner = [1u8; 32];
+let lamports = 1000u64;
+let hash = Poseidon::hashv(&[
+    &owner,
+    &lamports.to_le_bytes(),
+])?;
+```
+
+### Field Size
+
+Poseidon outputs must fit in the BN254 scalar field:
+
+```rust
+use light_hasher::hash_to_field_size::hash_to_bn254_field_size_be;
+
+// Truncate to field size (big-endian)
+let hash = Poseidon::hash(input)?;
+let field_element = hash_to_bn254_field_size_be(&hash);
+```
+
+**Field modulus:** `21888242871839275222246405745257275088548364400416034343698204186575808495617`
+
+### Poseidon Syscall
+
+On Solana, Poseidon uses a syscall for efficiency:
+
+```rust
+// Syscall ID: 3221749473 (0xC0135B01)
+extern "C" {
+    fn sol_poseidon(
+        parameters: u8,
+        endianness: u8,
+        vals_len: u64,
+        vals_addr: *const u8,
+        result_addr: *mut u8,
+    ) -> u64;
+}
+```
+
+**Parameters:**
+- `0`: Circom parameters (default)
+- `1`: x5 parameters
+
+**Endianness:**
+- `0`: Big-endian (default)
+- `1`: Little-endian
+
+## Hash Chain
+
+Sequentially hash multiple values:
+
+```rust
+use light_hasher::{Poseidon, hash_chain};
+
+let values = vec![
+    [1u8; 32],
+    [2u8; 32],
+    [3u8; 32],
+];
+
+// Computes: H(H(H(0, v1), v2), v3)
+let chain_hash = hash_chain::<Poseidon>(
+    &values.iter().collect::<Vec<_>>(),
+)?;
+```
+
+**Use case:** Computing hash chains for ZKP batch verification
+
+**Formula:**
+```
+chain_0 = 0
+chain_i = H(chain_{i-1}, value_i)
+result = chain_n
+```
+
+## Zero Bytes
+
+Precomputed zero-leaf hashes for Merkle trees:
+
+```rust
+use light_hasher::{Poseidon, Hasher};
+
+let zero_bytes = Poseidon::zero_bytes();
+
+// Access by level (0-39)
+let level_0 = zero_bytes[0];  // H(0)
+let level_1 = zero_bytes[1];  // H(H(0), H(0))
+let level_2 = zero_bytes[2];  // H(H(H(0), H(0)), H(H(0), H(0)))
+// ...
+```
+
+**Purpose:** Sparse Merkle tree optimization - empty subtrees use precomputed hashes
+
+### Zero-Indexed Leaf
+
+Initial value for indexed Merkle trees:
+
+```rust
+let zero_leaf = Poseidon::zero_indexed_leaf();
+// H(0, HIGHEST_ADDRESS_PLUS_ONE)
+```
+
+## DataHasher Trait
+
+Hash structured data with discriminators:
+
+```rust
+pub trait DataHasher {
+    const DISCRIMINATOR: [u8; 8];
+    
+    fn hash_with_discriminator(data: &[u8]) -> Result<[u8; 32], HasherError> {
+        Poseidon::hashv(&[
+            &Self::DISCRIMINATOR,
+            data,
+        ])
+    }
+}
+```
+
+**Example:**
+```rust
+struct MyAccount;
+
+impl DataHasher for MyAccount {
+    const DISCRIMINATOR: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+}
+
+let data = vec![10, 20, 30];
+let hash = MyAccount::hash_with_discriminator(&data)?;
+```
+
+## Error Codes
+
+### HasherError
+
+| Error | Code | Description |
+|-------|------|-------------|
+| `IntegerOverflow` | 11001 | Integer overflow in computation |
+| `InvalidNumberOfInputs` | 11002 | Too many inputs (max 12) |
+| `InvalidSliceLength` | 11003 | Input slice wrong size |
+| `ArithmeticUnderflow` | 11004 | Arithmetic underflow |
+| `BnInvalidPadding` | 11005 | Invalid padding in BigNum |
+| `PoseidonSyscallFailed` | 11006 | Poseidon syscall error |
+| `HashSetError` | 11007 | Hash set operation failed |
+| `AnchorSerializationError` | 11008 | Serialization error |
+
+### PoseidonSyscallError
+
+Detailed Poseidon syscall errors:
+
+| Error | Code | Description |
+|-------|------|-------------|
+| `InvalidParameters` | 1 | Invalid parameter selection |
+| `InvalidEndianness` | 2 | Invalid endianness flag |
+| `InvalidNumberOfInputs` | 3 | Input count out of range (1-12) |
+| `EmptyInput` | 4 | Input slice is empty |
+| `InvalidInputLength` | 5 | Input not 32 bytes |
+| `BytesToPrimeFieldElement` | 6 | Failed to convert to field element |
+| `InputLargerThanModulus` | 7 | Input exceeds field modulus |
+| `VecToArray` | 8 | Failed to convert vec to array |
+| `U64Tou8` | 9 | Failed to convert u64 to u8 |
+| `BytesToBigInt` | 10 | Failed BigInt conversion |
+| `InvalidWidthCircom` | 11 | Invalid Circom width (2-16) |
+
+## Usage Examples
+
+### Hash Compressed Account
+
+```rust
+use light_hasher::{Poseidon, Hasher};
+
+struct CompressedAccount {
+    owner: [u8; 32],
+    lamports: u64,
+    address: Option<[u8; 32]>,
+    data_hash: [u8; 32],
+}
+
+fn hash_account(account: &CompressedAccount) -> Result<[u8; 32], HasherError> {
+    let address = account.address.unwrap_or([0u8; 32]);
+    
+    Poseidon::hashv(&[
+        &account.owner,
+        &account.lamports.to_le_bytes(),
+        &address,
+        &account.data_hash,
+    ])
+}
+```
+
+### Merkle Tree Path Verification
+
+```rust
+use light_hasher::{Poseidon, Hasher};
+
+fn verify_merkle_proof(
+    leaf: [u8; 32],
+    proof: &[[u8; 32]],
+    path_indices: &[bool],
+    root: [u8; 32],
+) -> Result<bool, HasherError> {
+    let mut current = leaf;
+    
+    for (sibling, &is_left) in proof.iter().zip(path_indices) {
+        current = if is_left {
+            Poseidon::hashv(&[&current, sibling])?
+        } else {
+            Poseidon::hashv(&[sibling, &current])?
+        };
+    }
+    
+    Ok(current == root)
+}
+```
+
+### Hash Chain for ZKP Batch
+
+```rust
+use light_hasher::{Poseidon, hash_chain};
+
+// Compute hash chain for batch of leaves
+fn compute_batch_hash_chain(
+    leaves: &[[u8; 32]],
+) -> Result<[u8; 32], HasherError> {
+    hash_chain::<Poseidon>(&leaves.iter().collect::<Vec<_>>())
+}
+
+// Use in ZKP public inputs
+let hash_chain = compute_batch_hash_chain(&batch_leaves)?;
+let public_inputs = [
+    old_root,
+    new_root,
+    hash_chain,  // Commitment to batch values
+];
+```
+
+### Multi-Hasher Support
+
+```rust
+use light_hasher::{Poseidon, Keccak, Sha256, Hasher};
+
+fn generic_hash<H: Hasher>(data: &[u8]) -> Result<[u8; 32], HasherError> {
+    H::hash(data)
+}
+
+// Use different hashers
+let poseidon_hash = generic_hash::<Poseidon>(data)?;
+let keccak_hash = generic_hash::<Keccak>(data)?;
+let sha256_hash = generic_hash::<Sha256>(data)?;
+```
+
+## Performance
+
+### Compute Units (approximate)
+
+| Operation | Poseidon | Keccak | SHA-256 |
+|-----------|----------|--------|----------|
+| Single hash | ~500 CU | ~100 CU | ~50 CU |
+| Hash 2 values | ~700 CU | ~110 CU | ~60 CU |
+| Hash 4 values | ~1100 CU | ~130 CU | ~80 CU |
+
+**Note:** Poseidon is more expensive on Solana but ZK-friendly in circuits
+
+### Optimization Tips
+
+<AccordionGroup>
+  <Accordion title="Batch Hash Calls">
+    Use `hashv` instead of multiple `hash` calls:
+    
+    ```rust
+    // Good: Single hashv call
+    Poseidon::hashv(&[a, b, c])?;
+    
+    // Bad: Multiple hash calls
+    let h1 = Poseidon::hash(a)?;
+    let h2 = Poseidon::hash(&[h1, b].concat())?;
+    let h3 = Poseidon::hash(&[h2, c].concat())?;
+    ```
+  </Accordion>
+  
+  <Accordion title="Minimize Input Count">
+    Poseidon cost increases with input count. Combine inputs when possible.
+  </Accordion>
+  
+  <Accordion title="Use Zero Bytes">
+    For Merkle trees, always use precomputed `zero_bytes()` for empty subtrees.
+  </Accordion>
+  
+  <Accordion title="Choose Right Hasher">
+    Use Poseidon only when ZK compatibility is needed. For general hashing, Keccak or SHA-256 are faster.
+  </Accordion>
+</AccordionGroup>
+
+## Feature Flags
+
+<ParamField path="std" type="feature">
+  Enables standard library features
+</ParamField>
+
+<ParamField path="alloc" type="feature">
+  Enables allocation without std
+</ParamField>
+
+<ParamField path="solana" type="feature">
+  Enables Solana syscall integration
+</ParamField>
+
+<ParamField path="test-sbf" type="feature">
+  Enables SBF test utilities
+</ParamField>
+
+## Testing
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use light_hasher::{Poseidon, Hasher};
+    
+    #[test]
+    fn test_poseidon_hash() {
+        let input = b"test input";
+        let hash = Poseidon::hash(input).unwrap();
+        assert_eq!(hash.len(), 32);
+    }
+    
+    #[test]
+    fn test_hash_deterministic() {
+        let input = [1u8; 32];
+        let hash1 = Poseidon::hash(&input).unwrap();
+        let hash2 = Poseidon::hash(&input).unwrap();
+        assert_eq!(hash1, hash2);
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Poseidon for ZK Circuits">
+    Poseidon is optimized for zero-knowledge proofs. Use it for any data that will be verified in ZK circuits (compressed accounts, Merkle trees).
+  </Accordion>
+  
+  <Accordion title="Consistent Byte Ordering">
+    Always use little-endian for integers: `lamports.to_le_bytes()`
+  </Accordion>
+  
+  <Accordion title="Include Discriminators">
+    When hashing account data, always include the discriminator to prevent type confusion.
+  </Accordion>
+  
+  <Accordion title="Validate Field Size">
+    When passing hashes to ZK circuits, ensure they're within the BN254 field using `hash_to_bn254_field_size_be`.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Source Code" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/program-libs/hasher">
+    View on GitHub
+  </Card>
+  <Card title="API Docs" icon="book" href="https://docs.rs/light-hasher">
+    Rust documentation
+  </Card>
+  <Card title="Poseidon Paper" icon="file-pdf" href="https://eprint.iacr.org/2019/458.pdf">
+    Original Poseidon paper
+  </Card>
+  <Card title="Solana Syscalls" icon="microchip" href="https://docs.solana.com/developing/runtime-facilities/sysvars#hash-syscalls">
+    Solana syscall documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,416 @@
+---
+title: "Compressed Token Instructions"
+description: "Instruction reference for the compressed token program"
+icon: "code"
+---
+
+## Overview
+
+The compressed token program (`cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m`) implements SPL Token-compatible operations for compressed tokens. Instructions support both compressed accounts (in Merkle trees) and decompressed CToken accounts (standard Solana accounts).
+
+**Program ID:** `cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m`  
+**Documentation:** [Compressed Token Program](/programs/compressed-token)
+
+## Instruction Categories
+
+<CardGroup cols={3}>
+  <Card title="Token Operations" icon="arrows-rotate">
+    Transfer2, MintAction, Freeze, Thaw
+  </Card>
+  <Card title="Account Management" icon="folder-plus">
+    Create, Close token accounts
+  </Card>
+  <Card title="CToken Operations" icon="coins">
+    Transfer, Approve, Burn, Mint
+  </Card>
+</CardGroup>
+
+## Discriminator Reference
+
+### Compressed Token Operations
+
+| Instruction | Discriminator | SPL Compatible |
+|-------------|---------------|----------------|
+| **Transfer2** | 101 | No |
+| **MintAction** | 103 | No |
+| **Freeze** | Anchor | No |
+| **Thaw** | Anchor | No |
+
+### CToken Account Operations
+
+| Instruction | Discriminator | SPL Equivalent |
+|-------------|---------------|----------------|
+| **CreateTokenAccount** | 18 | InitializeAccount3 |
+| **CreateAssociatedTokenAccount** | 100 | - |
+| **CreateAssociatedTokenAccountIdempotent** | 102 | - |
+| **CloseTokenAccount** | 9 | CloseAccount |
+
+### CToken Transfer & Approval
+
+| Instruction | Discriminator | SPL Equivalent |
+|-------------|---------------|----------------|
+| **CTokenTransfer** | 3 | Transfer |
+| **CTokenTransferChecked** | 12 | TransferChecked |
+| **CTokenApprove** | 4 | Approve |
+| **CTokenRevoke** | 5 | Revoke |
+
+### CToken Mint & Burn
+
+| Instruction | Discriminator | SPL Equivalent |
+|-------------|---------------|----------------|
+| **CTokenMintTo** | 7 | MintTo |
+| **CTokenMintToChecked** | 14 | MintToChecked |
+| **CTokenBurn** | 8 | Burn |
+| **CTokenBurnChecked** | 15 | BurnChecked |
+
+### CToken Freeze
+
+| Instruction | Discriminator | SPL Equivalent |
+|-------------|---------------|----------------|
+| **CTokenFreezeAccount** | 10 | FreezeAccount |
+| **CTokenThawAccount** | 11 | ThawAccount |
+
+### Rent Management
+
+| Instruction | Discriminator | SPL Compatible |
+|-------------|---------------|----------------|
+| **Claim** | 104 | No |
+| **WithdrawFundingPool** | 105 | No |
+
+## Transfer2
+
+**Discriminator:** 101  
+**Enum:** `InstructionType::Transfer2`
+
+Batch transfer instruction supporting compress, decompress, and transfer operations.
+
+### Instruction Data
+
+```rust
+pub struct Transfer2InstructionData {
+    pub inputs: Vec<CompressedTokenInput>,
+    pub output_compressed_accounts: Vec<OutputCompressedAccountData>,
+    pub output_state_merkle_tree_account_indices: Vec<u8>,
+    pub ctoken_transfers: Vec<CTokenTransfer>,
+    pub compress_or_decompress_amounts: Vec<u64>,
+    pub compress_or_decompress_token_output_indices: Vec<u8>,
+    pub proof: Option<CompressedProof>,
+    pub mint: Pubkey,
+    pub delegated_transfer: Option<DelegatedTransferData>,
+    pub is_compress: bool,
+    pub compression_lamports: Option<u64>,
+}
+```
+
+<ParamField path="inputs" type="Vec<CompressedTokenInput>">
+  Input compressed token accounts to spend (with Merkle proofs)
+</ParamField>
+
+<ParamField path="output_compressed_accounts" type="Vec<OutputCompressedAccountData>">
+  Output compressed token accounts to create
+</ParamField>
+
+<ParamField path="ctoken_transfers" type="Vec<CTokenTransfer>">
+  Transfers between CToken (decompressed) accounts
+</ParamField>
+
+<ParamField path="compress_or_decompress_amounts" type="Vec<u64>">
+  Amounts to compress or decompress
+</ParamField>
+
+<ParamField path="is_compress" type="bool">
+  True for compress operations, false for decompress
+</ParamField>
+
+### Operations
+
+<Accordion title="Transfer Compressed">
+  Transfer between compressed token accounts.
+  
+  **Flow:**
+  1. Verify inclusion proofs for input accounts
+  2. Sum check: inputs = outputs
+  3. Insert nullifiers for spent accounts
+  4. Insert output account hashes into queue
+</Accordion>
+
+<Accordion title="Compress">
+  Convert CToken account to compressed token.
+  
+  **Flow:**
+  1. Verify CToken account ownership
+  2. Burn tokens from CToken account
+  3. Create compressed token account
+  4. Optionally close CToken account
+</Accordion>
+
+<Accordion title="Decompress">
+  Convert compressed token to CToken account.
+  
+  **Flow:**
+  1. Verify inclusion proof for compressed account
+  2. Insert nullifier (spend compressed account)
+  3. Mint tokens to CToken account
+</Accordion>
+
+### Example
+
+```rust
+// Transfer between compressed accounts
+let inputs = vec![CompressedTokenInput {
+    owner: sender_pubkey,
+    amount: 1000,
+    delegate_index: None,
+    merkle_context: PackedMerkleContext { /* ... */ },
+    root_index: 0,
+}];
+
+let outputs = vec![OutputCompressedAccountData {
+    owner: recipient_pubkey,
+    amount: 1000,
+    lamports: 0,
+}];
+
+let ix_data = Transfer2InstructionData {
+    inputs,
+    output_compressed_accounts: outputs,
+    proof: Some(validity_proof),
+    mint: mint_pubkey,
+    // ... other fields
+};
+```
+
+## MintAction
+
+**Discriminator:** 103  
+**Enum:** `InstructionType::MintAction`
+
+Batch instruction for mint management and minting operations.
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| **CreateCompressedMint** | Create new compressed mint |
+| **MintTo** | Mint compressed tokens |
+| **UpdateMintAuthority** | Change mint authority |
+| **UpdateFreezeAuthority** | Change freeze authority |
+| **MintToCToken** | Mint to CToken account |
+| **UpdateMetadataField** | Update token metadata |
+| **UpdateMetadataAuthority** | Change metadata authority |
+| **RemoveMetadataKey** | Remove metadata field |
+| **DecompressMint** | Convert to SPL mint |
+| **CompressAndCloseCMint** | Compress and close mint account |
+
+### Instruction Data
+
+```rust
+pub struct MintActionInstructionData {
+    pub action: MintAction,
+    pub amount: Option<u64>,
+    pub new_authority: Option<Pubkey>,
+    pub metadata_field: Option<TokenMetadataField>,
+    pub proof: Option<CompressedProof>,
+}
+```
+
+### Example: Mint Tokens
+
+```rust
+let ix_data = MintActionInstructionData {
+    action: MintAction::MintTo,
+    amount: Some(1_000_000),
+    new_authority: None,
+    metadata_field: None,
+    proof: None,
+};
+```
+
+## CToken Instructions
+
+### CTokenTransfer
+
+**Discriminator:** 3  
+**SPL Equivalent:** Transfer
+
+Transfer tokens between CToken accounts.
+
+```rust
+pub struct CTokenTransferData {
+    pub amount: u64,
+}
+```
+
+**Accounts:**
+1. Source CToken account (mut)
+2. Destination CToken account (mut)
+3. Authority (signer)
+
+### CTokenApprove
+
+**Discriminator:** 4  
+**SPL Equivalent:** Approve
+
+Approve delegate for CToken account.
+
+```rust
+pub struct CTokenApproveData {
+    pub amount: u64,
+}
+```
+
+**Accounts:**
+1. CToken account (mut)
+2. Delegate
+3. Owner (signer)
+
+### CTokenMintTo
+
+**Discriminator:** 7  
+**SPL Equivalent:** MintTo
+
+Mint tokens to CToken account.
+
+```rust
+pub struct CTokenMintToData {
+    pub amount: u64,
+}
+```
+
+**Accounts:**
+1. Mint
+2. Destination CToken account (mut)
+3. Mint authority (signer)
+
+### CTokenBurn
+
+**Discriminator:** 8  
+**SPL Equivalent:** Burn
+
+Burn tokens from CToken account.
+
+```rust
+pub struct CTokenBurnData {
+    pub amount: u64,
+}
+```
+
+**Accounts:**
+1. CToken account (mut)
+2. Mint (mut)
+3. Authority (signer)
+
+## Account Management
+
+### CreateTokenAccount
+
+**Discriminator:** 18  
+**SPL Equivalent:** InitializeAccount3
+
+Create CToken account.
+
+```rust
+pub struct CreateTokenAccountData {
+    pub owner: Pubkey,
+    pub extensions: Option<Vec<ExtensionType>>,
+}
+```
+
+### CloseTokenAccount
+
+**Discriminator:** 9  
+**SPL Equivalent:** CloseAccount
+
+Close CToken account and reclaim rent.
+
+**Rent distribution:**
+- If compressible: rent → rent recipient
+- Remaining lamports → destination account
+
+## Rent Management
+
+### Claim
+
+**Discriminator:** 104  
+**Enum:** `InstructionType::Claim`
+
+Claim rent from expired compressible accounts.
+
+```rust
+pub struct ClaimInstructionData {
+    pub bump: u8,
+}
+```
+
+**Requirements:**
+- Account must be compressible
+- Rentability period expired
+- Rent authority matches
+
+### WithdrawFundingPool
+
+**Discriminator:** 105  
+**Enum:** `InstructionType::WithdrawFundingPool`
+
+Withdraw from rent recipient pool.
+
+```rust
+pub struct WithdrawFundingPoolData {
+    pub amount: u64,
+    pub bump: u8,
+}
+```
+
+## Error Codes
+
+Common error codes (30000+ range):
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 30001 | `InsufficientFunds` | Not enough tokens |
+| 30002 | `InvalidMint` | Wrong mint for operation |
+| 30003 | `InvalidAuthority` | Authority check failed |
+| 30004 | `InvalidDelegate` | Delegate check failed |
+| 30005 | `AccountFrozen` | Account is frozen |
+| 30006 | `MintHasNoFreezeAuthority` | Mint cannot freeze |
+| 30007 | `SumCheckFailed` | Inputs != outputs |
+| 30008 | `InvalidProof` | ZK proof verification failed |
+| 30009 | `DecompressionError` | Failed to decompress |
+| 30010 | `CompressionError` | Failed to compress |
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Validate Proofs">
+    Transfer2 requires valid ZK proofs. Never skip proof validation.
+  </Accordion>
+  
+  <Accordion title="Check Sum Constraints">
+    For transfers, verify that total inputs equal total outputs (including fees).
+  </Accordion>
+  
+  <Accordion title="Handle Tree Rollovers">
+    When Merkle trees roll over, update account Merkle context references.
+  </Accordion>
+  
+  <Accordion title="Use Batch Operations">
+    Transfer2 and MintAction support batching. Combine operations for efficiency.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Program Source" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/programs/compressed-token">
+    View on GitHub
+  </Card>
+  <Card title="Instruction Docs" icon="book" href="https://github.com/Lightprotocol/light-protocol/tree/main/programs/compressed-token/program/docs/INSTRUCTIONS.md">
+    Detailed instruction reference
+  </Card>
+  <Card title="SDK" icon="toolbox" href="/sdk/compressed-token/overview">
+    TypeScript SDK
+  </Card>
+  <Card title="Examples" icon="code-branch" href="https://github.com/Lightprotocol/program-examples">
+    Program examples
+  </Card>
+</CardGroup>

@@ -1,0 +1,751 @@
+---
+title: "Program Integration"
+description: "Integrate Light Protocol into your Solana programs"
+---
+
+## Overview
+
+This guide shows how to integrate Light SDK into Solana programs using different frameworks: Anchor, native Solana, and Pinocchio.
+
+## Anchor Program Integration
+
+### Setup
+
+Add Light SDK to your Anchor program's `Cargo.toml`:
+
+```toml Cargo.toml
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+light-sdk = { version = "0.23.0", features = ["anchor", "v2", "cpi-context"] }
+light-instruction-decoder = { version = "0.23.0" }
+borsh = "0.10.4"
+```
+
+### Basic Structure
+
+Here's a complete example of an Anchor program with compressed accounts:
+
+```rust lib.rs
+use anchor_lang::prelude::*;
+use light_sdk::{
+    account::LightAccount,
+    address::v1::derive_address,
+    cpi::{
+        v2::lowlevel::InstructionDataInvokeCpiWithReadOnly,
+        CpiAccounts, InvokeLightSystemProgram,
+    },
+    derive_light_cpi_signer,
+    instruction::{
+        account_meta::CompressedAccountMeta,
+        PackedAddressTreeInfo,
+        ValidityProof,
+    },
+    LightDiscriminator, LightHasher, CpiSigner,
+};
+use light_instruction_decoder::instruction_decoder;
+
+declare_id!("YourProgramIDHere");
+
+// Generate CPI signer from program ID
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("YourProgramIDHere");
+
+#[instruction_decoder]
+#[program]
+pub mod my_program {
+    use super::*;
+
+    pub fn create_compressed_account<'info>(
+        ctx: Context<'_, '_, '_, 'info, CreateAccount<'info>>,
+        proof: ValidityProof,
+        address_tree_info: PackedAddressTreeInfo,
+        output_tree_index: u8,
+        name: String,
+    ) -> Result<()> {
+        // Parse Light CPI accounts from remaining accounts
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
+
+        // Derive deterministic address
+        let (address, address_seed) = derive_address(
+            &[b"my-account", name.as_bytes()],
+            &address_tree_info.get_tree_pubkey(&light_cpi_accounts)?,
+            &crate::ID,
+        );
+
+        // Prepare new address parameters
+        let new_address_params = address_tree_info
+            .into_new_address_params_assigned_packed(address_seed, Some(0));
+
+        // Create compressed account
+        let mut account = LightAccount::<MyAccount>::new_init(
+            &crate::ID,
+            Some(address),
+            output_tree_index,
+        );
+
+        // Set account data
+        account.name = name;
+        account.counter = 0;
+
+        // Invoke Light System Program CPI
+        InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+            .mode_v1()
+            .with_light_account(account)?
+            .with_new_addresses(&[new_address_params])
+            .invoke(light_cpi_accounts)?;
+
+        Ok(())
+    }
+
+    pub fn update_compressed_account<'info>(
+        ctx: Context<'_, '_, '_, 'info, UpdateAccount<'info>>,
+        proof: ValidityProof,
+        account_data: MyAccount,
+        account_meta: CompressedAccountMeta,
+    ) -> Result<()> {
+        // Load existing account
+        let mut account = LightAccount::<MyAccount>::new_mut(
+            &crate::ID,
+            &account_meta,
+            account_data,
+        )?;
+
+        // Update account data
+        account.counter += 1;
+
+        // Invoke CPI to update
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
+
+        InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+            .mode_v1()
+            .with_light_account(account)?
+            .invoke(light_cpi_accounts)?;
+
+        Ok(())
+    }
+
+    pub fn close_compressed_account<'info>(
+        ctx: Context<'_, '_, '_, 'info, UpdateAccount<'info>>,
+        proof: ValidityProof,
+        account_data: MyAccount,
+        account_meta: CompressedAccountMeta,
+    ) -> Result<()> {
+        // Load account for closing
+        let account = LightAccount::<MyAccount>::new_close(
+            &crate::ID,
+            &account_meta,
+            account_data,
+        )?;
+
+        // Invoke CPI to close
+        let light_cpi_accounts = CpiAccounts::new(
+            ctx.accounts.signer.as_ref(),
+            ctx.remaining_accounts,
+            crate::LIGHT_CPI_SIGNER,
+        );
+
+        InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+            .mode_v1()
+            .with_light_account(account)?
+            .invoke(light_cpi_accounts)?;
+
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct CreateAccount<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateAccount<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+}
+
+// Define compressed account data structure
+#[derive(Clone, Debug, AnchorSerialize, AnchorDeserialize, LightDiscriminator, LightHasher)]
+pub struct MyAccount {
+    pub name: String,
+    pub counter: u64,
+}
+```
+
+### Key Components
+
+<AccordionGroup>
+  <Accordion title="CPI Signer">
+    The `LIGHT_CPI_SIGNER` is derived from your program ID and used to authorize CPI calls to the Light System Program.
+
+    ```rust
+    pub const LIGHT_CPI_SIGNER: CpiSigner =
+        derive_light_cpi_signer!("YourProgramIDHere");
+    ```
+  </Accordion>
+
+  <Accordion title="Instruction Decoder">
+    The `#[instruction_decoder]` macro generates instruction discriminator functions for client-side instruction building.
+
+    ```rust
+    #[instruction_decoder]
+    #[program]
+    pub mod my_program {
+        // ...
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Account Derivation">
+    Derive deterministic addresses for compressed accounts using seed phrases:
+
+    ```rust
+    let (address, address_seed) = derive_address(
+        &[b"my-account", user.key().as_ref()],
+        &address_tree_pubkey,
+        &program_id,
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="CPI Accounts">
+    Parse remaining accounts for Light System Program CPI:
+
+    ```rust
+    let light_cpi_accounts = CpiAccounts::new(
+        ctx.accounts.signer.as_ref(),
+        ctx.remaining_accounts,
+        LIGHT_CPI_SIGNER,
+    );
+    ```
+
+    This handles:
+    - State Merkle trees
+    - Address Merkle trees
+    - System programs
+    - Account compression program
+  </Accordion>
+</AccordionGroup>
+
+## Native Solana Program Integration
+
+### Setup
+
+```toml Cargo.toml
+[dependencies]
+solana-program = "2.3"
+light-sdk = { version = "0.23.0", features = ["v2"] }
+light-macros = "1.0"
+borsh = "0.10.4"
+```
+
+### Basic Structure
+
+```rust lib.rs
+use solana_program::{
+    account_info::AccountInfo,
+    entrypoint,
+    entrypoint::ProgramResult,
+    pubkey::Pubkey,
+};
+use light_sdk::{
+    account::LightAccount,
+    address::v1::derive_address,
+    cpi::{
+        v1::{CpiAccounts, LightSystemProgramCpi},
+        InvokeLightSystemProgram,
+    },
+    derive_light_cpi_signer,
+    instruction::{
+        account_meta::CompressedAccountMeta,
+        PackedAddressTreeInfo,
+        ValidityProof,
+    },
+    LightDiscriminator,
+};
+use light_macros::pubkey;
+
+pub const ID: Pubkey = pubkey!("YourProgramIDHere");
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("YourProgramIDHere");
+
+entrypoint!(process_instruction);
+
+pub fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    // Parse instruction discriminator
+    let discriminator = instruction_data[0];
+    let data = &instruction_data[1..];
+
+    match discriminator {
+        0 => create_compressed_account(program_id, accounts, data),
+        1 => update_compressed_account(program_id, accounts, data),
+        _ => Err(ProgramError::InvalidInstructionData),
+    }
+}
+
+fn create_compressed_account(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    // Deserialize instruction data
+    let (proof, rest) = ValidityProof::deserialize(instruction_data)?;
+    let (address_tree_info, rest) = PackedAddressTreeInfo::deserialize(rest)?;
+    let output_tree_index = rest[0];
+
+    // Parse accounts
+    let fee_payer = &accounts[0];
+    let remaining_accounts = &accounts[1..];
+
+    let light_cpi_accounts = CpiAccounts::new(
+        fee_payer,
+        remaining_accounts,
+        LIGHT_CPI_SIGNER,
+    )?;
+
+    // Derive address
+    let (address, address_seed) = derive_address(
+        &[b"counter", fee_payer.key.as_ref()],
+        &address_tree_info.get_tree_pubkey(&light_cpi_accounts)?,
+        program_id,
+    );
+
+    let new_address_params = address_tree_info
+        .into_new_address_params_packed(address_seed);
+
+    // Create account
+    let mut account = LightAccount::<CounterAccount>::new_init(
+        program_id,
+        Some(address),
+        output_tree_index,
+    );
+
+    account.counter = 0;
+
+    // Invoke CPI
+    LightSystemProgramCpi::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .with_light_account(account)?
+        .with_new_addresses(&[new_address_params])
+        .invoke(light_cpi_accounts)
+}
+
+#[derive(Clone, Debug, Default, LightDiscriminator)]
+pub struct CounterAccount {
+    pub counter: u64,
+}
+```
+
+## Token Operations Integration
+
+### Setup
+
+```toml Cargo.toml
+[dependencies]
+light-token = { version = "0.23.0", features = ["anchor"] }
+light-sdk = { version = "0.23.0", features = ["anchor", "v2"] }
+```
+
+### Create Mint
+
+```rust
+use light_token::instruction::CreateMintCpi;
+use light_token_interface::state::TokenMetadata;
+
+pub fn create_token_mint<'info>(
+    ctx: Context<'_, '_, '_, 'info, TokenContext<'info>>,
+    decimals: u8,
+    name: String,
+    symbol: String,
+) -> Result<()> {
+    let metadata = TokenMetadata {
+        name,
+        symbol,
+        uri: String::new(),
+        additional_metadata: vec![],
+    };
+
+    CreateMintCpi::new(
+        &ctx.accounts.authority.key(),
+        &ctx.accounts.mint.key(),
+        decimals,
+        Some(metadata),
+    )
+    .invoke(ctx.remaining_accounts)?;
+
+    Ok(())
+}
+```
+
+### Transfer Tokens
+
+```rust
+use light_token::instruction::TransferInterfaceCpi;
+
+pub fn transfer_tokens<'info>(
+    ctx: Context<'_, '_, '_, 'info, TokenContext<'info>>,
+    amount: u64,
+) -> Result<()> {
+    TransferInterfaceCpi::new(
+        &ctx.accounts.from.key(),
+        &ctx.accounts.to.key(),
+        &ctx.accounts.authority.key(),
+        &ctx.accounts.mint.key(),
+        amount,
+    )
+    .invoke(ctx.remaining_accounts)?;
+
+    Ok(())
+}
+```
+
+### Compress and Decompress
+
+```rust
+use light_compressed_token_sdk::compressed_token::{
+    batch_compress::Recipient,
+    decompress_full::DecompressFullIndices,
+};
+
+pub fn compress_tokens<'info>(
+    ctx: Context<'_, '_, '_, 'info, Generic<'info>>,
+    output_tree_index: u8,
+    recipient: Pubkey,
+    mint: Pubkey,
+    amount: u64,
+) -> Result<()> {
+    // Compress from Light token account to compressed account
+    let recipients = vec![Recipient {
+        address: recipient,
+        amount,
+    }];
+
+    // Build and invoke compress CPI
+    // ...
+
+    Ok(())
+}
+
+pub fn decompress_tokens<'info>(
+    ctx: Context<'_, '_, '_, 'info, Generic<'info>>,
+    indices: Vec<DecompressFullIndices>,
+    validity_proof: ValidityProof,
+) -> Result<()> {
+    // Decompress from compressed account to Light token account
+    // ...
+
+    Ok(())
+}
+```
+
+## CPI Context (Advanced)
+
+<Note>
+CPI Context enables multiple programs to share a single validity proof in one instruction. This is useful for complex operations involving both tokens and custom compressed accounts.
+</Note>
+
+### Setup
+
+Enable the `cpi-context` feature:
+
+```toml Cargo.toml
+[dependencies]
+light-sdk = { version = "0.23.0", features = ["anchor", "v2", "cpi-context"] }
+light-token = { version = "0.23.0", features = ["anchor", "cpi-context"] }
+```
+
+### Example: Transfer Tokens + Update PDA
+
+```rust
+use light_sdk::cpi::v2::lowlevel::InstructionDataInvokeCpiWithReadOnly;
+use light_sdk_types::cpi_accounts::v2::CpiAccounts;
+use light_token::instruction::TransferInterfaceCpi;
+
+pub fn transfer_and_update<'info>(
+    ctx: Context<'_, '_, '_, 'info, TransferAndUpdate<'info>>,
+    proof: ValidityProof,
+    transfer_amount: u64,
+    pda_data: MyPdaData,
+    pda_meta: CompressedAccountMeta,
+) -> Result<()> {
+    // Parse CPI accounts with context
+    let cpi_accounts = CpiAccounts::new(
+        ctx.accounts.authority.as_ref(),
+        ctx.remaining_accounts,
+        CpiAccountsConfig {
+            cpi_signer: LIGHT_CPI_SIGNER,
+            write_to_cpi_context: true,
+        },
+    );
+
+    // 1. Transfer tokens (writes to CPI context)
+    TransferInterfaceCpi::new(
+        &ctx.accounts.from.key(),
+        &ctx.accounts.to.key(),
+        &ctx.accounts.authority.key(),
+        &ctx.accounts.mint.key(),
+        transfer_amount,
+    )
+    .with_cpi_context()
+    .invoke(cpi_accounts)?;
+
+    // 2. Update compressed PDA (reads from CPI context)
+    let mut pda = LightAccount::<MyPdaData>::new_mut(
+        &crate::ID,
+        &pda_meta,
+        pda_data,
+    )?;
+
+    pda.last_transfer_amount = transfer_amount;
+
+    InstructionDataInvokeCpiWithReadOnly::new_cpi(LIGHT_CPI_SIGNER, proof)
+        .mode_v2()
+        .with_light_account(pda)?
+        .with_cpi_context()
+        .invoke(cpi_accounts)?;
+
+    Ok(())
+}
+```
+
+## Testing
+
+### Setup Test Environment
+
+```toml Cargo.toml
+[dev-dependencies]
+light-program-test = "0.23.0"
+tokio = { version = "1.48", features = ["macros"] }
+```
+
+### Test Example
+
+```rust tests/integration.rs
+use light_program_test::test_env::{
+    setup_test_env,
+    EnvAccounts,
+};
+use solana_sdk::{
+    signature::Keypair,
+    signer::Signer,
+};
+
+#[tokio::test]
+async fn test_create_compressed_account() {
+    // Setup test environment
+    let mut context = setup_test_env().await;
+    let payer = context.payer.insecure_clone();
+
+    // Get validity proof
+    let proof = context.get_validity_proof(
+        vec![], // no input accounts
+        vec![], // one new address
+    ).await;
+
+    // Build instruction
+    let ix = create_compressed_account_instruction(
+        &payer.pubkey(),
+        proof,
+        // ...
+    );
+
+    // Send transaction
+    let result = context
+        .send_transaction(&[ix], &payer)
+        .await;
+
+    assert!(result.is_ok());
+
+    // Query created account
+    let accounts = context
+        .get_compressed_accounts_by_owner(&payer.pubkey())
+        .await;
+
+    assert_eq!(accounts.len(), 1);
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Account Size Limits">
+    Compressed account data is sent as instruction data, so keep account size reasonable:
+
+    - **Recommended:** < 1 KB per account
+    - **Maximum:** ~10 KB (instruction data limit)
+    - For larger data, use multiple accounts or reference on-chain storage
+  </Accordion>
+
+  <Accordion title="Address Derivation">
+    Use deterministic address derivation for predictable account addresses:
+
+    ```rust
+    // Good: deterministic, can be recomputed
+    derive_address(
+        &[b"my-account", user.key().as_ref()],
+        &tree_pubkey,
+        &program_id,
+    )
+
+    // Bad: random, cannot be queried
+    derive_address(
+        &[&random_bytes],
+        &tree_pubkey,
+        &program_id,
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Error Handling">
+    Handle Light SDK errors properly:
+
+    ```rust
+    use light_sdk::error::LightSdkError;
+
+    let result = light_cpi_accounts.parse(remaining_accounts);
+    match result {
+        Ok(accounts) => { /* proceed */ },
+        Err(LightSdkError::InvalidAccountData) => {
+            msg!("Invalid account data provided");
+            return Err(ProgramError::InvalidAccountData);
+        },
+        Err(e) => {
+            msg!("Light SDK error: {:?}", e);
+            return Err(ProgramError::Custom(1));
+        },
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Validity Proof Reuse">
+    With CPI context, reuse validity proofs across multiple operations:
+
+    ```rust
+    // One proof for multiple operations
+    let proof = get_validity_proof().await;
+
+    // Operation 1: Transfer tokens
+    transfer_tokens(proof.clone())?;
+
+    // Operation 2: Update PDA
+    update_pda(proof)?;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Common Patterns
+
+### Counter Program
+
+```rust
+#[derive(Clone, LightDiscriminator, LightHasher)]
+pub struct Counter {
+    pub authority: Pubkey,
+    pub count: u64,
+}
+
+pub fn increment(ctx: Context<Update>, proof: ValidityProof, ...) -> Result<()> {
+    let mut counter = LightAccount::<Counter>::new_mut(...)?
+    counter.count += 1;
+    // ... invoke CPI
+}
+```
+
+### User Profile
+
+```rust
+#[derive(Clone, LightDiscriminator, LightHasher)]
+pub struct UserProfile {
+    pub owner: Pubkey,
+    pub username: String,
+    pub avatar_uri: String,
+    pub created_at: i64,
+}
+```
+
+### Escrow Account
+
+```rust
+#[derive(Clone, LightDiscriminator, LightHasher)]
+pub struct Escrow {
+    pub seller: Pubkey,
+    pub buyer: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub state: EscrowState,
+}
+
+#[derive(Clone, Copy)]
+pub enum EscrowState {
+    Pending,
+    Completed,
+    Cancelled,
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Invalid Proof Error">
+    **Cause:** Validity proof doesn't match account state
+
+    **Solution:**
+    - Ensure proof includes all input account hashes
+    - Verify address tree matches derived addresses
+    - Check that account state hasn't changed since proof generation
+  </Accordion>
+
+  <Accordion title="Account Not Found">
+    **Cause:** Compressed account doesn't exist or wrong address
+
+    **Solution:**
+    - Use indexer to query existing accounts
+    - Verify address derivation seeds
+    - Check that account hasn't been closed
+  </Accordion>
+
+  <Accordion title="Tree Full Error">
+    **Cause:** State or address tree has reached capacity
+
+    **Solution:**
+    - Use different tree (change `tree_index`)
+    - Trees are managed by protocol, typically shouldn't happen
+    - Contact support if persistent
+  </Accordion>
+
+  <Accordion title="CPI Context Error">
+    **Cause:** Mismatched CPI context configuration
+
+    **Solution:**
+    - Enable `cpi-context` feature on all dependencies
+    - Ensure all CPIs in instruction use same context
+    - First CPI must write to context
+    - Subsequent CPIs must read from context
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Program Examples" icon="github" href="https://github.com/Lightprotocol/program-examples">
+    Explore complete program examples
+  </Card>
+  <Card title="Testing Guide" icon="flask" href="/guides/testing">
+    Learn how to test your programs
+  </Card>
+  <Card title="API Reference" icon="book" href="https://docs.rs/light-sdk">
+    Complete API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,769 @@
+---
+title: "RPC Methods Reference"
+description: "Complete reference for Light Protocol RPC methods"
+---
+
+## Overview
+
+The `Rpc` class extends Solana's `Connection` with compression-specific methods. It provides a unified interface for querying compressed accounts, requesting proofs, and managing state trees.
+
+## Creating an RPC Connection
+
+```typescript
+import { createRpc, Rpc } from '@lightprotocol/stateless.js';
+
+// Local test validator
+const rpc: Rpc = createRpc();
+
+// Devnet
+const rpc: Rpc = createRpc(
+  'https://devnet.helius-rpc.com',
+  'https://devnet.helius-rpc.com'
+);
+
+// Custom endpoints (Solana RPC + Compression RPC)
+const rpc: Rpc = createRpc(
+  'https://api.mainnet-beta.solana.com',
+  'https://zk-compression.mainnet.lightprotocol.com'
+);
+```
+
+## Account Query Methods
+
+### getCompressedAccount
+
+Fetch a single compressed account by hash or address.
+
+<ParamField path="address" type="BN254 | undefined">
+  Account address (32 bytes). Provide either address or hash, not both.
+</ParamField>
+
+<ParamField path="hash" type="BN254 | undefined">
+  Account hash. Provide either address or hash, not both.
+</ParamField>
+
+<ResponseField name="CompressedAccountWithMerkleContext | null">
+  The compressed account with Merkle context, or null if not found.
+</ResponseField>
+
+```typescript
+import { bn } from '@lightprotocol/stateless.js';
+
+// By hash
+const account = await rpc.getCompressedAccount(
+  undefined,
+  bn('account-hash...')
+);
+
+// By address
+const account = await rpc.getCompressedAccount(
+  new Uint8Array([/* 32 bytes */]),
+  undefined
+);
+
+if (account) {
+  console.log('Owner:', account.owner.toBase58());
+  console.log('Balance:', account.lamports.toString());
+  console.log('Leaf index:', account.leafIndex);
+}
+```
+
+### getMultipleCompressedAccounts
+
+Batch fetch multiple compressed accounts.
+
+<ParamField path="hashes" type="BN254[]" required>
+  Array of account hashes to fetch.
+</ParamField>
+
+<ResponseField name="CompressedAccountWithMerkleContext[]">
+  Array of compressed accounts in the same order as the input hashes.
+</ResponseField>
+
+```typescript
+const hashes = [
+  bn('hash1...'),
+  bn('hash2...'),
+  bn('hash3...'),
+];
+
+const accounts = await rpc.getMultipleCompressedAccounts(hashes);
+
+accounts.forEach((account, i) => {
+  console.log(`Account ${i}:`, {
+    owner: account.owner.toBase58(),
+    lamports: account.lamports.toString(),
+  });
+});
+```
+
+### getCompressedAccountsByOwner
+
+Get all compressed accounts owned by a public key, with optional filtering and pagination.
+
+<ParamField path="owner" type="PublicKey" required>
+  Public key of the account owner.
+</ParamField>
+
+<ParamField path="config" type="GetCompressedAccountsByOwnerConfig">
+  Optional configuration:
+  - `filters`: Array of memcmp filters
+  - `dataSlice`: Limit returned data (offset + length)
+  - `cursor`: Pagination cursor from previous response
+  - `limit`: Maximum number of accounts to return
+</ParamField>
+
+<ResponseField name="WithCursor<CompressedAccountWithMerkleContext[]>">
+  Object with `items` array and optional `cursor` for pagination.
+</ResponseField>
+
+```typescript
+import { PublicKey } from '@solana/web3.js';
+
+const owner = new PublicKey('...');
+
+// Basic query
+const result = await rpc.getCompressedAccountsByOwner(owner);
+console.log('Found accounts:', result.items.length);
+
+// With pagination
+let cursor: string | undefined;
+const allAccounts = [];
+
+do {
+  const result = await rpc.getCompressedAccountsByOwner(owner, {
+    cursor,
+    limit: bn(1000),
+  });
+  
+  allAccounts.push(...result.items);
+  cursor = result.cursor ?? undefined;
+} while (cursor);
+
+// With filters
+const filtered = await rpc.getCompressedAccountsByOwner(owner, {
+  filters: [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: 'base58string',
+      },
+    },
+  ],
+});
+
+// With data slice
+const sliced = await rpc.getCompressedAccountsByOwner(owner, {
+  dataSlice: {
+    offset: 0,
+    length: 32,
+  },
+});
+```
+
+## Balance Methods
+
+### getCompressedBalance
+
+Get the balance of a single compressed account.
+
+<ParamField path="address" type="BN254 | undefined">
+  Account address. Provide either address or hash.
+</ParamField>
+
+<ParamField path="hash" type="BN254 | undefined">
+  Account hash. Provide either address or hash.
+</ParamField>
+
+<ResponseField name="BN">
+  Balance in lamports.
+</ResponseField>
+
+```typescript
+// By hash
+const balance = await rpc.getCompressedBalance(
+  undefined,
+  accountHash
+);
+
+// By address
+const balance = await rpc.getCompressedBalance(
+  accountAddress,
+  undefined
+);
+
+console.log('Balance:', balance.toString(), 'lamports');
+```
+
+### getCompressedBalanceByOwner
+
+Get the total compressed balance for an owner.
+
+<ParamField path="owner" type="PublicKey" required>
+  Public key of the owner.
+</ParamField>
+
+<ResponseField name="BN">
+  Total balance across all compressed accounts owned by the public key.
+</ResponseField>
+
+```typescript
+const owner = new PublicKey('...');
+
+const totalBalance = await rpc.getCompressedBalanceByOwner(owner);
+console.log('Total compressed SOL:', totalBalance.toString());
+```
+
+## Proof Methods
+
+### getCompressedAccountProof
+
+Get the Merkle proof for a single account.
+
+<ParamField path="hash" type="BN254" required>
+  Hash of the compressed account.
+</ParamField>
+
+<ResponseField name="MerkleContextWithMerkleProof">
+  Object containing:
+  - `hash`: Account hash
+  - `treeInfo`: Tree information
+  - `leafIndex`: Position in tree
+  - `merkleProof`: Array of sibling hashes
+  - `root`: Current root
+  - `rootIndex`: Root index
+  - `proveByIndex`: Whether to prove by index
+</ResponseField>
+
+```typescript
+const proof = await rpc.getCompressedAccountProof(accountHash);
+
+console.log('Proof:', {
+  root: proof.root.toString(),
+  leafIndex: proof.leafIndex,
+  pathLength: proof.merkleProof.length,
+});
+```
+
+### getMultipleCompressedAccountProofs
+
+Batch fetch Merkle proofs for multiple accounts.
+
+<ParamField path="hashes" type="BN254[]" required>
+  Array of account hashes.
+</ParamField>
+
+<ResponseField name="MerkleContextWithMerkleProof[]">
+  Array of Merkle proofs in the same order as input hashes.
+</ResponseField>
+
+```typescript
+const hashes = [
+  bn('hash1...'),
+  bn('hash2...'),
+];
+
+const proofs = await rpc.getMultipleCompressedAccountProofs(hashes);
+
+proofs.forEach((proof, i) => {
+  console.log(`Proof ${i} root:`, proof.root.toString());
+});
+```
+
+### getValidityProof
+
+Request a validity proof for spending compressed accounts.
+
+<ParamField path="hashes" type="BN254[]" required>
+  Array of account hashes to spend.
+</ParamField>
+
+<ParamField path="newAddresses" type="BN254[]">
+  Optional array of new addresses to create.
+</ParamField>
+
+<ResponseField name="ValidityProofWithContext">
+  Object containing:
+  - `compressedProof`: ZK proof (a, b, c points)
+  - `roots`: Array of Merkle roots
+  - `rootIndices`: Indices of roots
+  - `leafIndices`: Account leaf indices
+  - `leaves`: Account hashes
+  - `treeInfos`: Tree information
+  - `proveByIndices`: Flags for proof type
+</ResponseField>
+
+```typescript
+const accounts = await rpc.getCompressedAccountsByOwner(owner.publicKey);
+
+const proof = await rpc.getValidityProof(
+  accounts.items.map(acc => bn(acc.hash))
+);
+
+// Use in transaction
+const ix = await LightSystemProgram.transfer({
+  payer: payer.publicKey,
+  inputCompressedAccounts: accounts.items,
+  toAddress: recipient,
+  lamports: amount,
+  recentInputStateRootIndices: proof.rootIndices,
+  recentValidityProof: proof.compressedProof,
+});
+```
+
+### getValidityProofV0
+
+Legacy method with explicit tree specification.
+
+<ParamField path="hashes" type="HashWithTree[]" required>
+  Array of objects with `hash`, `tree`, and `queue` fields.
+</ParamField>
+
+<ParamField path="newAddresses" type="AddressWithTree[]">
+  Optional array of addresses with tree info.
+</ParamField>
+
+```typescript
+const proof = await rpc.getValidityProofV0(
+  accounts.items.map(acc => ({
+    hash: bn(acc.hash),
+    tree: acc.treeInfo.tree,
+    queue: acc.treeInfo.queue,
+  }))
+);
+```
+
+## Token Account Methods
+
+### getCompressedTokenAccountsByOwner
+
+Get compressed token accounts owned by a public key.
+
+<ParamField path="owner" type="PublicKey" required>
+  Token account owner.
+</ParamField>
+
+<ParamField path="options" type="GetCompressedTokenAccountsByOwnerOrDelegateOptions">
+  Optional:
+  - `mint`: Filter by mint public key
+  - `cursor`: Pagination cursor
+  - `limit`: Maximum results
+</ParamField>
+
+<ResponseField name="WithCursor<ParsedTokenAccount[]>">
+  Object with `items` array of token accounts and optional `cursor`.
+</ResponseField>
+
+```typescript
+import { PublicKey } from '@solana/web3.js';
+
+const owner = new PublicKey('...');
+const mint = new PublicKey('...');
+
+// All token accounts
+const result = await rpc.getCompressedTokenAccountsByOwner(owner);
+
+// Filter by mint
+const tokenAccounts = await rpc.getCompressedTokenAccountsByOwner(owner, {
+  mint,
+});
+
+tokenAccounts.items.forEach(account => {
+  console.log('Token account:', {
+    mint: account.parsed.mint.toBase58(),
+    amount: account.parsed.amount.toString(),
+    delegate: account.parsed.delegate?.toBase58(),
+  });
+});
+```
+
+### getCompressedTokenAccountsByDelegate
+
+Get token accounts where the public key is a delegate.
+
+<ParamField path="delegate" type="PublicKey" required>
+  Delegate public key.
+</ParamField>
+
+<ParamField path="options" type="GetCompressedTokenAccountsByOwnerOrDelegateOptions">
+  Same as `getCompressedTokenAccountsByOwner`.
+</ParamField>
+
+```typescript
+const delegate = new PublicKey('...');
+
+const result = await rpc.getCompressedTokenAccountsByDelegate(delegate, {
+  mint,
+});
+
+console.log('Delegated accounts:', result.items.length);
+```
+
+### getCompressedTokenAccountBalance
+
+Get the token balance of a specific compressed token account.
+
+<ParamField path="hash" type="BN254" required>
+  Hash of the compressed token account.
+</ParamField>
+
+<ResponseField name="{ amount: BN }">
+  Object containing the token amount.
+</ResponseField>
+
+```typescript
+const balance = await rpc.getCompressedTokenAccountBalance(accountHash);
+console.log('Token balance:', balance.amount.toString());
+```
+
+### getCompressedTokenBalancesByOwner
+
+Get aggregated token balances by mint for an owner.
+
+<ParamField path="owner" type="PublicKey" required>
+  Token owner.
+</ParamField>
+
+<ParamField path="options" type="GetCompressedTokenAccountsByOwnerOrDelegateOptions">
+  Optional mint filter and pagination.
+</ParamField>
+
+<ResponseField name="WithCursor<TokenBalance[]>">
+  Array of `{ balance, mint }` objects.
+</ResponseField>
+
+```typescript
+const result = await rpc.getCompressedTokenBalancesByOwner(owner);
+
+result.items.forEach(({ mint, balance }) => {
+  console.log(`${mint.toBase58()}: ${balance.toString()}`);
+});
+```
+
+### getCompressedMintTokenHolders
+
+Get all holders of a compressed mint.
+
+<ParamField path="mint" type="PublicKey" required>
+  Mint public key.
+</ParamField>
+
+<ParamField path="options" type="PaginatedOptions">
+  Optional cursor and limit.
+</ParamField>
+
+<ResponseField name="WithContext<WithCursor<CompressedMintTokenHolders[]>>">
+  Context with slot, cursor, and array of `{ owner, balance }` objects.
+</ResponseField>
+
+```typescript
+const result = await rpc.getCompressedMintTokenHolders(mint);
+
+result.value.items.forEach(holder => {
+  console.log(`${holder.owner.toBase58()}: ${holder.balance.toString()}`);
+});
+```
+
+## State Tree Methods
+
+### getStateTreeInfos
+
+Get all active state trees.
+
+<ResponseField name="TreeInfo[]">
+  Array of state tree information objects.
+</ResponseField>
+
+```typescript
+const trees = await rpc.getStateTreeInfos();
+
+trees.forEach(tree => {
+  console.log('Tree:', {
+    tree: tree.tree.toBase58(),
+    queue: tree.queue.toBase58(),
+    treeType: tree.treeType,
+  });
+});
+```
+
+### selectStateTreeInfo
+
+Utility to select an appropriate state tree.
+
+```typescript
+import { selectStateTreeInfo } from '@lightprotocol/stateless.js';
+
+const trees = await rpc.getStateTreeInfos();
+const selected = selectStateTreeInfo(trees);
+
+console.log('Selected tree:', selected.tree.toBase58());
+```
+
+## Transaction Methods
+
+### getTransactionWithCompressionInfo
+
+Get transaction details including compression-specific info.
+
+<ParamField path="signature" type="string" required>
+  Transaction signature (base58).
+</ParamField>
+
+<ResponseField name="CompressedTransaction | null">
+  Transaction with compression info:
+  - `compressionInfo.closedAccounts`: Spent accounts
+  - `compressionInfo.openedAccounts`: Created accounts
+  - `transaction`: Standard Solana transaction
+</ResponseField>
+
+```typescript
+const txInfo = await rpc.getTransactionWithCompressionInfo(signature);
+
+if (txInfo) {
+  console.log('Closed accounts:', txInfo.compressionInfo.closedAccounts.length);
+  console.log('Opened accounts:', txInfo.compressionInfo.openedAccounts.length);
+}
+```
+
+### getCompressionSignaturesForAccount
+
+Get all signatures for a compressed account.
+
+<ParamField path="hash" type="BN254" required>
+  Account hash.
+</ParamField>
+
+<ResponseField name="SignatureWithMetadata[]">
+  Array of signatures with slot and blockTime.
+</ResponseField>
+
+```typescript
+const signatures = await rpc.getCompressionSignaturesForAccount(accountHash);
+
+signatures.forEach(sig => {
+  console.log('Transaction:', {
+    signature: sig.signature,
+    slot: sig.slot,
+    time: new Date(sig.blockTime * 1000),
+  });
+});
+```
+
+### getCompressionSignaturesForAddress
+
+Get signatures for an account address.
+
+<ParamField path="address" type="PublicKey" required>
+  Account address.
+</ParamField>
+
+<ParamField path="options" type="PaginatedOptions">
+  Optional cursor and limit.
+</ParamField>
+
+```typescript
+const result = await rpc.getCompressionSignaturesForAddress(
+  address,
+  { limit: bn(100) }
+);
+
+console.log('Found', result.items.length, 'transactions');
+```
+
+### getCompressionSignaturesForOwner
+
+Get all compression transactions for an owner.
+
+<ParamField path="owner" type="PublicKey" required>
+  Owner public key.
+</ParamField>
+
+<ParamField path="options" type="PaginatedOptions">
+  Optional cursor and limit.
+</ParamField>
+
+```typescript
+const result = await rpc.getCompressionSignaturesForOwner(owner, {
+  cursor: undefined,
+  limit: bn(1000),
+});
+
+result.items.forEach(sig => {
+  console.log('Tx:', sig.signature, 'at slot', sig.slot);
+});
+```
+
+### getCompressionSignaturesForTokenOwner
+
+Get token-related signatures for an owner.
+
+<ParamField path="owner" type="PublicKey" required>
+  Token owner.
+</ParamField>
+
+<ParamField path="options" type="PaginatedOptions">
+  Optional cursor and limit.
+</ParamField>
+
+```typescript
+const result = await rpc.getCompressionSignaturesForTokenOwner(owner);
+console.log('Token transactions:', result.items.length);
+```
+
+### getLatestCompressionSignatures
+
+Get the latest compression transactions.
+
+<ParamField path="cursor" type="string | undefined">
+  Pagination cursor.
+</ParamField>
+
+<ParamField path="limit" type="number | undefined">
+  Maximum number of signatures.
+</ParamField>
+
+```typescript
+const result = await rpc.getLatestCompressionSignatures(undefined, 100);
+
+console.log('Latest transactions:', result.value.items.length);
+```
+
+## Indexer Methods
+
+### getIndexerHealth
+
+Check indexer health status.
+
+<ResponseField name="string">
+  Health status string (e.g., "ok").
+</ResponseField>
+
+```typescript
+const health = await rpc.getIndexerHealth();
+console.log('Indexer health:', health);
+```
+
+### getIndexerSlot
+
+Get the current indexer slot.
+
+<ResponseField name="number">
+  Current slot number indexed.
+</ResponseField>
+
+```typescript
+const slot = await rpc.getIndexerSlot();
+console.log('Indexer is at slot:', slot);
+```
+
+## Unified Interface Methods (V2+)
+
+<Note>
+These methods provide a unified interface for both compressed and uncompressed accounts.
+</Note>
+
+### getAccountInfoInterface
+
+Get account info supporting both hot (on-chain) and cold (compressed) accounts.
+
+```typescript
+const info = await rpc.getAccountInfoInterface(
+  address,
+  programId,
+  'confirmed'
+);
+
+if (info) {
+  console.log('Account is', info.isCold ? 'cold' : 'hot');
+  console.log('Data:', info.accountInfo.data);
+}
+```
+
+### getSignaturesForAddressInterface
+
+Get signatures from both Solana RPC and compression indexer.
+
+```typescript
+const result = await rpc.getSignaturesForAddressInterface(address);
+
+console.log('Unified signatures:', result.signatures.length);
+console.log('Solana only:', result.solana.length);
+console.log('Compressed only:', result.compressed.length);
+```
+
+### getTokenAccountBalanceInterface
+
+Get unified token balance (hot + cold).
+
+```typescript
+const balance = await rpc.getTokenAccountBalanceInterface(
+  ata,
+  owner,
+  mint
+);
+
+console.log('Total balance:', balance.amount.toString());
+console.log('Has cold balance:', balance.hasColdBalance);
+if (balance.hasColdBalance) {
+  console.log('Remember to call load() before usage');
+}
+```
+
+### getBalanceInterface
+
+Get unified SOL balance (hot + cold).
+
+```typescript
+const balance = await rpc.getBalanceInterface(address);
+
+console.log('Total SOL:', balance.total.toString());
+console.log('Has cold balance:', balance.hasColdBalance);
+```
+
+## Utility Functions
+
+### createRpc
+
+Factory function to create an RPC connection.
+
+```typescript
+export function createRpc(
+  solanaRpcUrl?: string,
+  compressionRpcUrl?: string,
+  config?: ConnectionConfig
+): Rpc
+```
+
+### bn
+
+Create a BN (big number) from various inputs.
+
+```typescript
+import { bn } from '@lightprotocol/stateless.js';
+
+const num1 = bn(1000000);
+const num2 = bn('1000000');
+const num3 = bn(new BN(1000000));
+```
+
+### encodeBN254toBase58
+
+Encode a BN254 field element to base58.
+
+```typescript
+import { encodeBN254toBase58 } from '@lightprotocol/stateless.js';
+
+const base58 = encodeBN254toBase58(accountHash);
+console.log('Hash (base58):', base58);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Compressed Accounts" icon="folder-tree" href="/sdk/stateless-js/compressed-accounts">
+    Learn about working with compressed accounts
+  </Card>
+  <Card title="Compressed Tokens" icon="coins" href="/sdk/compressed-token/overview">
+    Build with compressed SPL tokens
+  </Card>
+</CardGroup>

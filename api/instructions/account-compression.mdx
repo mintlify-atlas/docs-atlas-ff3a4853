@@ -1,0 +1,413 @@
+---
+title: "Account Compression Instructions"
+description: "Instruction reference for the account compression program"
+icon: "compress"
+---
+
+## Overview
+
+The account compression program (`compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq`) manages Merkle trees for state compression. It handles tree initialization, updates, and rollover operations.
+
+**Program ID:** `compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq`  
+**Framework:** Anchor  
+**Documentation:** [Account Compression Program](/programs/account-compression)
+
+## Instruction Categories
+
+<CardGroup cols={3}>
+  <Card title="Tree Management" icon="tree">
+    Initialize and rollover Merkle trees
+  </Card>
+  <Card title="Queue Operations" icon="list">
+    Insert values into tree queues
+  </Card>
+  <Card title="Tree Updates" icon="rotate">
+    Batch update trees with ZK proofs
+  </Card>
+</CardGroup>
+
+## Tree Initialization
+
+### InitializeStateMerkleTreeAndNullifierQueue
+
+Initialize state Merkle tree and nullifier queue.
+
+**Anchor Method:** `initialize_state_merkle_tree_and_nullifier_queue`
+
+```rust
+pub fn initialize_state_merkle_tree_and_nullifier_queue(
+    ctx: Context<InitializeStateMerkleTreeAndNullifierQueue>,
+    index: u64,
+    program_owner: Option<Pubkey>,
+    forester: Option<Pubkey>,
+    state_merkle_tree_config: StateMerkleTreeConfig,
+    nullifier_queue_config: NullifierQueueConfig,
+    additional_bytes: u64,
+) -> Result<()>
+```
+
+<ParamField path="index" type="u64">
+  Optional identifier for the tree (not enforced by program)
+</ParamField>
+
+<ParamField path="program_owner" type="Option<Pubkey>">
+  Optional program that owns this tree (restricts which programs can use it)
+</ParamField>
+
+<ParamField path="forester" type="Option<Pubkey>">
+  Optional dedicated forester authority (who can update the tree)
+</ParamField>
+
+<ParamField path="state_merkle_tree_config" type="StateMerkleTreeConfig">
+  Tree configuration:
+  - `height`: Tree height (26, 30, 32, 40)
+  - `batch_size`: Leaves per batch (10, 100, 500, 1000)
+  - `zkp_batch_size`: Leaves per ZK proof (10, 500)
+  - `bloom_filter_capacity`: Nullifier bloom filter size
+  - `rollover_threshold`: % capacity before rollover (default: 95)
+  - `network_fee`: Optional fee per insertion
+</ParamField>
+
+<ParamField path="nullifier_queue_config" type="NullifierQueueConfig">
+  Nullifier queue configuration (integrated input queue)
+</ParamField>
+
+**Creates:** 2 accounts
+1. State Merkle tree account (tree + integrated nullifier queue)
+2. Output queue account (for new compressed accounts)
+
+### InitializeAddressMerkleTreeAndQueue
+
+Initialize address Merkle tree.
+
+**Anchor Method:** `initialize_address_merkle_tree_and_queue`
+
+```rust
+pub fn initialize_address_merkle_tree_and_queue(
+    ctx: Context<InitializeAddressMerkleTreeAndQueue>,
+    index: u64,
+    program_owner: Option<Pubkey>,
+    forester: Option<Pubkey>,
+    address_merkle_tree_config: AddressMerkleTreeConfig,
+    address_queue_config: AddressQueueConfig,
+) -> Result<()>
+```
+
+<ParamField path="address_merkle_tree_config" type="AddressMerkleTreeConfig">
+  Tree configuration:
+  - `height`: Tree height (26, 30, 32, 40)
+  - `batch_size`: Leaves per batch (10, 100, 250, 500)
+  - `zkp_batch_size`: Leaves per ZK proof (10, 250)
+  - `bloom_filter_capacity`: Address bloom filter size
+  - `rollover_threshold`: % capacity before rollover
+  - `network_fee`: Optional fee per insertion
+</ParamField>
+
+**Creates:** 1 account
+- Address Merkle tree with integrated address queue
+
+**Initial state:** Tree starts with single leaf `H(0, HIGHEST_ADDRESS_PLUS_ONE)`
+
+## Queue Insertion
+
+### InsertIntoQueues
+
+Insert values into Merkle tree queues.
+
+**Anchor Method:** `insert_into_queues`
+
+```rust
+pub fn insert_into_queues(
+    ctx: Context<InsertIntoQueues>,
+    nullifiers: Vec<[u8; 32]>,
+    new_addresses: Vec<[u8; 32]>,
+    new_compressed_account_hashes: Vec<[u8; 32]>,
+) -> Result<()>
+```
+
+<ParamField path="nullifiers" type="Vec<[u8; 32]>">
+  Nullifiers to insert into state tree input queue (spent accounts)
+</ParamField>
+
+<ParamField path="new_addresses" type="Vec<[u8; 32]>">
+  Addresses to insert into address tree queue
+</ParamField>
+
+<ParamField path="new_compressed_account_hashes" type="Vec<[u8; 32]>">
+  Account hashes to insert into state tree output queue
+</ParamField>
+
+**Side effects:**
+- Updates bloom filters for non-inclusion checks
+- Increments batch fill counters
+- May transition batch from Fill → Full
+
+**Called by:** System program during compressed account operations
+
+## Tree Updates
+
+### AppendLeavesWithProof
+
+Batch append leaves to state tree from output queue.
+
+**Anchor Method:** `append_leaves_with_proof`
+
+```rust
+pub fn append_leaves_with_proof(
+    ctx: Context<AppendLeavesWithProof>,
+    zkp_batch_index: u64,
+) -> Result<()>
+```
+
+<ParamField path="zkp_batch_index" type="u64">
+  Index of ZKP batch to process (0 to num_zkp_batches-1)
+</ParamField>
+
+**Accounts:**
+- `merkle_tree`: State Merkle tree (mut)
+- `output_queue`: Output queue account (mut)
+- `registered_forester_pda`: Forester authorization
+
+**ZK Proof verification:**
+```
+Public inputs = H(
+    old_root,
+    new_root,
+    hash_chain,  // H(leaf_1, leaf_2, ...)
+    start_index
+)
+```
+
+**Side effects:**
+- Inserts leaves into tree
+- Updates current root
+- Adds old root to root history
+- Increments `next_index`
+
+**Called by:** Forester service
+
+### UpdateAddressMerkleTree
+
+Update address Merkle tree with new address.
+
+**Anchor Method:** `update_address_merkle_tree`
+
+```rust
+pub fn update_address_merkle_tree(
+    ctx: Context<UpdateAddressMerkleTree>,
+    changelog_index: u16,
+    indexed_changelog_index: u16,
+    value: u16,
+    low_address_index: u64,
+    low_address_value: [u8; 32],
+    low_address_next_index: u64,
+    low_address_next_value: [u8; 32],
+    low_address_proof: [[u8; 32]; 16],
+) -> Result<()>
+```
+
+**Indexed Merkle Tree Update:**
+
+Address trees use indexed Merkle trees to maintain sorted order:
+
+1. Find low leaf (closest address < new address)
+2. Verify low leaf's Merkle proof
+3. Update low leaf to point to new address
+4. Insert new address pointing to next address
+
+<ParamField path="low_address_value" type="[u8; 32]">
+  Address value of low leaf
+</ParamField>
+
+<ParamField path="low_address_next_value" type="[u8; 32]">
+  Address value that low leaf currently points to
+</ParamField>
+
+<ParamField path="low_address_proof" type="[[u8; 32]; 16]">
+  Merkle proof for low leaf
+</ParamField>
+
+**Called by:** Forester service
+
+### NullifyLeaves
+
+Batch nullify leaves from state tree input queue.
+
+**Anchor Method:** `nullify_leaves`
+
+```rust
+pub fn nullify_leaves(
+    ctx: Context<NullifyLeaves>,
+    zkp_batch_index: u64,
+) -> Result<()>
+```
+
+**Similar to append but for nullifiers:**
+- Processes nullifier queue
+- Updates tree with spent account proofs
+- Verifies ZK proof of correct update
+
+## Rollover
+
+### RolloverStateMerkleTreeAndNullifierQueue
+
+Create new state tree when old tree reaches capacity.
+
+**Anchor Method:** `rollover_state_merkle_tree_and_nullifier_queue`
+
+```rust
+pub fn rollover_state_merkle_tree_and_nullifier_queue(
+    ctx: Context<RolloverStateMerkleTreeAndNullifierQueue>,
+) -> Result<()>
+```
+
+**Requirements:**
+- Old tree ≥ rollover threshold
+- New tree accounts provided and uninitialized
+- Authority signature
+
+**Process:**
+1. Validate old tree is eligible for rollover
+2. Initialize new tree with same config
+3. Mark old tree as rolled over
+4. Transfer any pending queue items to new tree
+
+**Accounts:**
+- Old merkle tree (mut)
+- Old output queue (mut)
+- New merkle tree (mut, uninitialized)
+- New output queue (mut, uninitialized)
+- Authority (signer)
+- Fee payer (signer, mut)
+
+### RolloverAddressMerkleTreeAndQueue
+
+Create new address tree when old tree reaches capacity.
+
+**Anchor Method:** `rollover_address_merkle_tree_and_queue`
+
+```rust
+pub fn rollover_address_merkle_tree_and_queue(
+    ctx: Context<RolloverAddressMerkleTreeAndQueue>,
+) -> Result<()>
+```
+
+**Similar process to state tree rollover**
+
+**Note:** Only one account to rollover (address trees don't have separate output queues)
+
+## Program Registration
+
+### InitializeGroupAuthority
+
+Initialize group authority account.
+
+**Anchor Method:** `initialize_group_authority`
+
+```rust
+pub fn initialize_group_authority(
+    ctx: Context<InitializeGroupAuthority>,
+    authority: Pubkey,
+) -> Result<()>
+```
+
+**Purpose:** Groups allow multiple programs to share Merkle trees
+
+### RegisterProgramToGroup
+
+Register program to access group's Merkle trees.
+
+**Anchor Method:** `register_program_to_group`
+
+```rust
+pub fn register_program_to_group(
+    ctx: Context<RegisterProgramToGroup>,
+) -> Result<()>
+```
+
+**Creates:** `RegisteredProgramPda` account
+
+**Purpose:** Proves program is authorized to use group's trees
+
+### DeregisterProgram
+
+Remove program from group.
+
+**Anchor Method:** `deregister_program`
+
+**Closes:** `RegisteredProgramPda` account
+
+## Error Codes
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 6000 | `InvalidAuthority` | Authority check failed |
+| 6001 | `InvalidProof` | ZK proof verification failed |
+| 6002 | `TreeIsFull` | Tree at capacity |
+| 6003 | `InvalidBatchIndex` | Invalid ZKP batch index |
+| 6004 | `BatchNotReady` | Batch not ready for update |
+| 6005 | `InvalidMerkleProof` | Merkle proof verification failed |
+| 6006 | `InvalidTreeHeight` | Unsupported tree height |
+| 6007 | `InvalidRolloverThreshold` | Invalid rollover threshold |
+| 6008 | `CannotRolloverYet` | Tree below rollover threshold |
+| 6009 | `AlreadyRolledOver` | Tree already rolled over |
+| 6010 | `InvalidForester` | Forester not authorized |
+
+## Compute Budget
+
+Approximate compute units for operations:
+
+| Operation | Compute Units |
+|-----------|---------------|
+| Initialize tree | ~50,000 CU |
+| Insert into queue | ~5,000 CU |
+| Append leaves (10) | ~100,000 CU |
+| Append leaves (500) | ~120,000 CU |
+| Update address tree | ~95,000 CU |
+| Nullify leaves (10) | ~100,000 CU |
+| Rollover | ~60,000 CU |
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose Appropriate Tree Sizes">
+    Larger trees hold more data but take longer to fill. Consider your expected transaction volume:
+    - Low traffic: Height 26 (67M leaves)
+    - High traffic: Height 32 (4B leaves) or 40 (1T leaves)
+  </Accordion>
+  
+  <Accordion title="Configure Batch Sizes Correctly">
+    Batch size affects how quickly trees can be updated:
+    - Development: Use small batches (10) for faster testing
+    - Production: Use larger batches (500) for efficiency
+  </Accordion>
+  
+  <Accordion title="Monitor Tree Capacity">
+    Track `next_index` relative to capacity. Start rollover when approaching threshold.
+  </Accordion>
+  
+  <Accordion title="Use Registered Programs">
+    Programs must be registered to insert into queues. Register during deployment.
+  </Accordion>
+  
+  <Accordion title="Run Forester Service">
+    Trees don't self-update. Run forester service or use hosted foresters to process queues.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Program Source" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/programs/account-compression">
+    View on GitHub
+  </Card>
+  <Card title="Batched Merkle Tree Lib" icon="binary-tree" href="/api/program-libs/batched-merkle-tree">
+    Core tree implementation
+  </Card>
+  <Card title="Forester" icon="tractor" href="/forester/overview">
+    Tree maintenance service
+  </Card>
+  <Card title="Examples" icon="code-branch" href="https://github.com/Lightprotocol/program-examples">
+    Program examples
+  </Card>
+</CardGroup>

@@ -1,0 +1,382 @@
+---
+title: "System Program Instructions"
+description: "Instruction reference for the Light Protocol system program"
+icon: "microchip"
+---
+
+## Overview
+
+The Light Protocol system program (`SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7`) is the core program for compressed account operations. It handles account creation, updates, and deletion using Merkle trees and zero-knowledge proofs.
+
+**Program ID:** `SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7`  
+**Documentation:** [System Program](/programs/system-program)
+
+## Instruction Types
+
+<CardGroup cols={2}>
+  <Card title="Invoke" icon="play">
+    Direct compressed account operations
+  </Card>
+  <Card title="InvokeCpi" icon="arrows-split-up-and-left">
+    Cross-program invocation context
+  </Card>
+  <Card title="CPI Context" icon="layer-group">
+    Account for storing CPI state
+  </Card>
+</CardGroup>
+
+## Discriminators
+
+| Instruction | Discriminator (8 bytes) | Description |
+|-------------|-------------------------|-------------|
+| **InitializeCpiContextAccount** | `[163, 223, 82, 38, 39, 61, 233, 233]` | Initialize CPI context account |
+| **Invoke** | `[163, 223, 82, 38, 39, 61, 233, 233]` | Execute compressed account ops |
+| **InvokeCpi** | `[230, 224, 109, 130, 81, 205, 191, 65]` | CPI from another program |
+| **InvokeCpiWithReadOnly** | Custom | CPI with readonly accounts |
+| **InvokeCpiWithAccountInfo** | Custom | CPI with account info mode |
+
+## Invoke
+
+**Discriminator:** `[163, 223, 82, 38, 39, 61, 233, 233]`
+
+Direct invocation for compressed account operations.
+
+### Instruction Data
+
+```rust
+pub struct InvokeInstructionData {
+    pub input_compressed_accounts_with_merkle_context: 
+        Vec<PackedCompressedAccountWithMerkleContext>,
+    pub output_compressed_accounts: Vec<OutputCompressedAccountData>,
+    pub relay_fee: Option<u64>,
+    pub new_address_params: Vec<NewAddressParams>,
+    pub compress_or_decompress_lamports: Option<u64>,
+    pub is_compress: bool,
+    pub proof: Option<CompressedProof>,
+}
+```
+
+<ParamField path="input_compressed_accounts_with_merkle_context" type="Vec<PackedCompressedAccountWithMerkleContext>">
+  Compressed accounts to spend (with Merkle proofs and context)
+</ParamField>
+
+<ParamField path="output_compressed_accounts" type="Vec<OutputCompressedAccountData>">
+  New compressed accounts to create
+</ParamField>
+
+<ParamField path="new_address_params" type="Vec<NewAddressParams>">
+  Parameters for creating new addresses in address Merkle tree
+</ParamField>
+
+<ParamField path="compress_or_decompress_lamports" type="Option<u64>">
+  Lamports to compress (move into Merkle tree) or decompress (move to Solana account)
+</ParamField>
+
+<ParamField path="is_compress" type="bool">
+  True for compress operation, false for decompress
+</ParamField>
+
+<ParamField path="proof" type="Option<CompressedProof>">
+  ZK proof for validity of operation (Groth16 proof, 128 bytes)
+</ParamField>
+
+### Operations
+
+<Accordion title="Create Compressed Accounts">
+  Create new compressed accounts in Merkle tree.
+  
+  **Steps:**
+  1. Derive addresses for output accounts (if needed)
+  2. Verify address non-inclusion proofs
+  3. Hash output accounts
+  4. Insert hashes into state tree output queue
+  5. Emit event with account data
+  
+  **Requirements:**
+  - Authority must sign
+  - Addresses must not exist (proven by ZK proof)
+  - Sum check: input lamports = output lamports + fees
+</Accordion>
+
+<Accordion title="Update Compressed Accounts">
+  Spend existing compressed accounts and create new ones.
+  
+  **Steps:**
+  1. Verify inclusion proofs for input accounts
+  2. Compute and insert nullifiers (prevent double-spend)
+  3. Create output accounts
+  4. Verify sum check
+  
+  **Requirements:**
+  - Valid inclusion proofs for inputs
+  - Authority signature
+  - Nullifiers not already used
+  - Sum check passes
+</Accordion>
+
+<Accordion title="Delete Compressed Accounts">
+  Spend compressed accounts without creating outputs.
+  
+  **Steps:**
+  1. Verify inclusion proofs
+  2. Insert nullifiers
+  3. Decompress lamports to Solana account
+  
+  **Use case:** Close compressed accounts and reclaim lamports
+</Accordion>
+
+<Accordion title="Compress Lamports">
+  Move lamports from Solana account into compressed account.
+  
+  **Steps:**
+  1. Transfer lamports from fee payer
+  2. Create compressed account with lamports
+  3. Insert into Merkle tree
+  
+  **Benefit:** Reduces rent costs (compressed accounts don't pay rent)
+</Accordion>
+
+<Accordion title="Decompress Lamports">
+  Move lamports from compressed account to Solana account.
+  
+  **Steps:**
+  1. Verify inclusion proof for compressed account
+  2. Insert nullifier (spend account)
+  3. Transfer lamports to destination Solana account
+  
+  **Use case:** Access lamports for non-Light Protocol operations
+</Accordion>
+
+### Example
+
+```rust
+// Create new compressed account
+let output = OutputCompressedAccountData {
+    owner: program_id,
+    lamports: 1_000_000,
+    data: Some(account_data),
+    address: Some(derived_address),
+};
+
+let ix_data = InvokeInstructionData {
+    input_compressed_accounts_with_merkle_context: vec![],
+    output_compressed_accounts: vec![output],
+    new_address_params: vec![address_params],
+    proof: Some(address_proof),
+    compress_or_decompress_lamports: Some(1_000_000),
+    is_compress: true,
+    relay_fee: None,
+};
+```
+
+## InvokeCpi
+
+**Discriminator:** `[230, 224, 109, 130, 81, 205, 191, 65]`
+
+Cross-program invocation for compressed account operations.
+
+### Instruction Data
+
+```rust
+pub struct InvokeCpiInstructionData {
+    pub inputs: InvokeInstructionData,
+    pub cpi_context: Option<CpiContext>,
+}
+
+pub struct CpiContext {
+    pub invoking_program: Pubkey,
+    pub cpi_context_account_index: u8,
+    pub execute: bool,
+}
+```
+
+<ParamField path="inputs" type="InvokeInstructionData">
+  Same data structure as Invoke instruction
+</ParamField>
+
+<ParamField path="cpi_context" type="Option<CpiContext>">
+  CPI context for tracking cross-program state:
+  - `invoking_program`: Program making the CPI
+  - `cpi_context_account_index`: Index of CPI context account
+  - `execute`: Whether to execute (true) or just validate (false)
+</ParamField>
+
+### CPI Context Account
+
+Accounts called via CPI must use a CPI context account to store intermediate state:
+
+```rust
+pub struct CpiContextAccount {
+    pub discriminator: [u8; 8],
+    pub fee_payer: Pubkey,
+    pub associated_merkle_tree: Pubkey,
+    pub cpi_signature_account_index: u8,
+    pub execute: bool,
+}
+```
+
+**Purpose:** Store state between CPI setup and execution
+
+### CPI Flow
+
+<Steps>
+  <Step title="Initialize CPI Context">
+    Calling program initializes CPI context account with `InitializeCpiContextAccount`
+  </Step>
+  <Step title="Setup Phase">
+    Call `InvokeCpi` with `execute: false` to validate and prepare state
+  </Step>
+  <Step title="Execution Phase">
+    Call `InvokeCpi` with `execute: true` to perform the operation
+  </Step>
+  <Step title="Cleanup">
+    CPI context account can be reused for next operation
+  </Step>
+</Steps>
+
+### Example
+
+```rust
+// In your program making CPI to system program
+
+// 1. Initialize CPI context (once)
+let cpi_context_ix = create_initialize_cpi_context_account_instruction(
+    &payer.pubkey(),
+    &cpi_context_account.pubkey(),
+);
+
+// 2. Setup phase
+let cpi_data = InvokeCpiInstructionData {
+    inputs: /* ... */,
+    cpi_context: Some(CpiContext {
+        invoking_program: my_program_id,
+        cpi_context_account_index: cpi_context_index,
+        execute: false,  // Setup only
+    }),
+};
+
+invoke_cpi_instruction(/* ... */)?;
+
+// 3. Execute phase  
+cpi_data.cpi_context.as_mut().unwrap().execute = true;
+invoke_cpi_instruction(/* ... */)?;
+```
+
+## InvokeCpiWithReadOnly
+
+Variant of InvokeCpi that supports readonly input accounts.
+
+**Use case:** Read compressed account data without spending it
+
+```rust
+pub struct InvokeCpiInstructionDataWithReadOnly {
+    pub inputs: InvokeInstructionData,
+    pub cpi_context: CpiContext,
+    pub readonly_indices: Vec<u8>,
+}
+```
+
+## InitializeCpiContextAccount
+
+Initialize CPI context account for cross-program calls.
+
+**Accounts:**
+1. Fee payer (mut, signer)
+2. CPI context account (mut)
+3. System program
+
+**Account size:** 200 bytes (expandable)
+
+## Accounts
+
+### Input Accounts
+
+<ResponseField name="authority" type="Signer" required>
+  Authority for input compressed accounts (must sign)
+</ResponseField>
+
+<ResponseField name="fee_payer" type="Signer, Writable" required>
+  Pays transaction fees and provides lamports for compression
+</ResponseField>
+
+<ResponseField name="registered_program_pda" type="Account">
+  PDA proving program is registered to use Merkle trees
+</ResponseField>
+
+<ResponseField name="noop_program" type="Program">
+  Noop program for emitting events (SPL Noop)
+</ResponseField>
+
+<ResponseField name="account_compression_program" type="Program">
+  Account compression program managing Merkle trees
+</ResponseField>
+
+<ResponseField name="merkle_tree_accounts" type="[Account]">
+  State and address Merkle tree accounts (dynamic count)
+</ResponseField>
+
+<ResponseField name="nullifier_queue_accounts" type="[Account, Writable]">
+  Nullifier queue accounts for spent account tracking
+</ResponseField>
+
+<ResponseField name="output_queue_accounts" type="[Account, Writable]">
+  Output queue accounts for new compressed accounts
+</ResponseField>
+
+## Error Codes
+
+Common error codes (11000+ range):
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 11001 | `InvalidAuthority` | Authority check failed |
+| 11002 | `InvalidProof` | ZK proof verification failed |
+| 11003 | `SumCheckFailed` | Input/output lamports don't match |
+| 11004 | `InvalidMerkleTree` | Wrong Merkle tree account |
+| 11005 | `InvalidNullifierQueue` | Wrong nullifier queue |
+| 11006 | `DuplicateNullifier` | Nullifier already exists |
+| 11007 | `InvalidAddress` | Address derivation failed |
+| 11008 | `AddressAlreadyExists` | Address already in tree |
+| 11009 | `InvalidCpiContext` | CPI context validation failed |
+| 11010 | `InvalidProgramOwner` | Program not registered |
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Provide Valid Proofs">
+    Inclusion and non-inclusion proofs must be fresh and correspond to current Merkle roots. Get proofs from Photon indexer.
+  </Accordion>
+  
+  <Accordion title="Verify Sum Checks">
+    Client-side verification: ensure total input lamports = total output lamports + fees. On-chain verification will reject mismatches.
+  </Accordion>
+  
+  <Accordion title="Use CPI Context Properly">
+    When calling via CPI, always initialize CPI context account first, then use two-phase (setup + execute) pattern.
+  </Accordion>
+  
+  <Accordion title="Handle Nullifiers Correctly">
+    Each compressed account can only be spent once. Track nullifiers to prevent double-spend attempts.
+  </Accordion>
+  
+  <Accordion title="Register Your Program">
+    Programs that use compressed accounts must be registered with the account compression program.
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Program Source" icon="code" href="https://github.com/Lightprotocol/light-protocol/tree/main/programs/system">
+    View on GitHub
+  </Card>
+  <Card title="SDK" icon="toolbox" href="/sdk/stateless-js/overview">
+    TypeScript SDK (stateless.js)
+  </Card>
+  <Card title="Rust SDK" icon="rust" href="/sdk/rust/sdk-libs">
+    Rust program SDK
+  </Card>
+  <Card title="Examples" icon="code-branch" href="https://github.com/Lightprotocol/program-examples">
+    Program examples
+  </Card>
+</CardGroup>

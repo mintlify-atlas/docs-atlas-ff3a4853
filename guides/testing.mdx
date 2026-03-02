@@ -1,0 +1,863 @@
+---
+title: 'Testing Strategies and Tools'
+description: 'Comprehensive guide to testing compressed accounts, tokens, and custom programs'
+---
+
+Learn how to effectively test Light Protocol programs using fast local environments, proper assertion patterns, and real-world testing strategies.
+
+## Overview
+
+Light Protocol provides specialized testing tools that work with both unit tests and integration tests. This guide covers testing patterns used throughout the Light Protocol codebase.
+
+### Test Categories
+
+- **Unit Tests**: Fast tests in `program-libs/` using `cargo test`
+- **Integration Tests**: Program tests in `program-tests/` using `cargo test-sbf`
+- **SDK Tests**: SDK integration tests in `sdk-tests/` using `cargo test-sbf`
+- **TypeScript Tests**: Client-side tests using the JS/TS SDK
+
+## Testing Tools
+
+### light-program-test
+
+Fast in-memory test environment using LiteSVM:
+
+```rust light-program-test
+use light_program_test::{LightProgramTest, ProgramTestConfig};
+use solana_sdk::signer::Signer;
+
+#[tokio::test]
+async fn test_compressed_account() {
+    // Initialize test environment
+    let config = ProgramTestConfig::new_v2(
+        true, // with_prover: starts prover server
+        Some(vec![("my_program", my_program::ID)]) // custom programs
+    );
+    let mut rpc = LightProgramTest::new(config).await.unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Airdrop for testing
+    rpc.airdrop_lamports(&payer.pubkey(), 1_000_000_000)
+        .await
+        .unwrap();
+
+    // Get tree info
+    let address_tree_info = rpc.get_address_tree_v2();
+    let state_tree_info = rpc.get_random_state_tree_info();
+
+    // Your test code here
+}
+```
+
+<Tip>
+**When to use `light-program-test`**:
+- Fast test execution needed
+- Unit/integration tests for programs
+- Testing program logic without external dependencies
+
+**When to use `solana-test-validator`**:
+- Need specific RPC methods
+- Testing with external tools
+- Full validator behavior required
+</Tip>
+
+### Test Configuration
+
+<CodeGroup>
+
+```rust V1 Trees (Default)
+let config = ProgramTestConfig::default();
+let mut rpc = LightProgramTest::new(config).await.unwrap();
+
+// Get V1 tree info
+let address_tree_info = rpc.get_address_tree_v1();
+let state_tree_info = rpc.get_random_state_tree_info();
+```
+
+```rust V2 Trees (Batched)
+let config = ProgramTestConfig::new_v2(
+    true, // with_prover
+    None  // no custom programs
+);
+let mut rpc = LightProgramTest::new(config).await.unwrap();
+
+// Get V2 tree info
+let address_tree_info = rpc.get_address_tree_v2();
+let state_tree_info = rpc.get_random_state_tree_info();
+```
+
+```rust Custom Programs
+use my_program;
+
+let config = ProgramTestConfig::new_v2(
+    true,
+    Some(vec![
+        ("my_program", my_program::ID),
+        ("another_program", another_program::ID),
+    ])
+);
+let mut rpc = LightProgramTest::new(config).await.unwrap();
+```
+
+</CodeGroup>
+
+## Testing Compressed Tokens
+
+### Setup Token Test Context
+
+```rust Token Test Setup
+use light_program_test::{LightProgramTest, ProgramTestConfig};
+use light_test_utils::{
+    mint_2022::create_mint_22_with_frozen_default_state,
+    Rpc,
+};
+use solana_sdk::signature::Keypair;
+
+async fn setup_token_test() -> (LightProgramTest, Keypair, Pubkey) {
+    let mut rpc = LightProgramTest::new(ProgramTestConfig::new_v2(false, None))
+        .await
+        .unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Create mint
+    let (mint_keypair, extension_config) =
+        create_mint_22_with_frozen_default_state(&mut rpc, &payer, 9).await;
+    let mint_pubkey = mint_keypair.pubkey();
+
+    (rpc, payer, mint_pubkey)
+}
+```
+
+### Test Token Creation
+
+```rust Test Create Token Account
+use light_token::instruction::{CompressibleParams, CreateTokenAccount};
+use light_token_interface::state::{Token, TokenDataVersion};
+use borsh::BorshDeserialize;
+
+#[tokio::test]
+async fn test_create_compressed_token_account() {
+    let (mut rpc, payer, mint) = setup_token_test().await;
+
+    // Create token account
+    let account_keypair = Keypair::new();
+    let account_pubkey = account_keypair.pubkey();
+
+    let create_ix = CreateTokenAccount::new(
+        payer.pubkey(),
+        account_pubkey,
+        mint,
+        payer.pubkey(),
+    )
+    .with_compressible(CompressibleParams {
+        compressible_config: rpc
+            .test_accounts
+            .funding_pool_config
+            .compressible_config_pda,
+        rent_sponsor: rpc.test_accounts.funding_pool_config.rent_sponsor_pda,
+        pre_pay_num_epochs: 2,
+        lamports_per_write: Some(100),
+        compress_to_account_pubkey: None,
+        token_account_version: TokenDataVersion::ShaFlat,
+        compression_only: true,
+    })
+    .instruction()
+    .unwrap();
+
+    rpc.create_and_send_transaction(
+        &[create_ix],
+        &payer.pubkey(),
+        &[&payer, &account_keypair],
+    )
+    .await
+    .unwrap();
+
+    // Verify account was created
+    let account = rpc.get_account(account_pubkey).await.unwrap().unwrap();
+    assert_eq!(account.data.len(), 274, "Token account should be 274 bytes");
+
+    // Deserialize and verify
+    let token = Token::deserialize(&mut &account.data[..])
+        .expect("Failed to deserialize Token account");
+
+    assert_eq!(token.mint, mint.to_bytes().into());
+    assert_eq!(token.owner, payer.pubkey().to_bytes().into());
+    assert_eq!(token.amount, 0);
+}
+```
+
+### Test Token Transfer
+
+```rust Test Transfer
+use light_test_utils::assert_ctoken_transfer::assert_ctoken_transfer;
+
+#[tokio::test]
+async fn test_token_transfer() {
+    let mut context = setup_transfer_test(None, 1000).await.unwrap();
+    let (source, destination, amount) = (
+        context.source_account,
+        context.destination_account,
+        500,
+    );
+
+    // Build transfer instruction
+    let mut data = vec![3u8]; // Transfer discriminator
+    data.extend_from_slice(&amount.to_le_bytes());
+
+    let transfer_ix = Instruction {
+        program_id: light_compressed_token::ID,
+        accounts: vec![
+            AccountMeta::new(source, false),
+            AccountMeta::new(destination, false),
+            AccountMeta::new(authority.pubkey(), true),
+        ],
+        data,
+    };
+
+    // Execute transfer
+    context
+        .rpc
+        .create_and_send_transaction(
+            &[transfer_ix],
+            &payer.pubkey(),
+            &[&payer, &authority],
+        )
+        .await
+        .unwrap();
+
+    // Assert transfer succeeded
+    assert_ctoken_transfer(&mut context.rpc, source, destination, amount).await;
+}
+```
+
+## Testing Compressed PDAs
+
+### Test Account Creation
+
+```rust Test PDA Creation
+use light_sdk::{
+    account::LightAccount,
+    address::v1::{derive_address, deriveAddressSeed},
+};
+
+#[tokio::test]
+async fn test_create_compressed_pda() {
+    let config = ProgramTestConfig::new_v2(true, Some(vec![("test_program", PROGRAM_ID)]));
+    let mut rpc = LightProgramTest::new(config).await.unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Derive address
+    let name = "test-account";
+    let address_tree_info = rpc.get_address_tree_v2();
+    let seed = deriveAddressSeed(
+        [b"compressed".as_slice(), name.as_bytes()],
+        &PROGRAM_ID,
+    );
+    let address = deriveAddress(seed, address_tree_info.tree, &PROGRAM_ID);
+
+    // Get validity proof
+    let proof_result = rpc
+        .getValidityProofV0(
+            [],
+            [{
+                tree: address_tree_info.tree,
+                queue: address_tree_info.tree,
+                address: bn(address.toBytes()),
+            }],
+        )
+        .await
+        .unwrap();
+
+    // Create account instruction
+    let create_ix = create_compressed_account_instruction(
+        &program_id,
+        &payer.pubkey(),
+        proof_result,
+        address_tree_info,
+        name.to_string(),
+    );
+
+    // Execute
+    rpc.create_and_send_transaction(&[create_ix], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
+
+    // Query and verify
+    let compressed_account = rpc
+        .getCompressedAccount(bn(address.toBytes()))
+        .await
+        .unwrap();
+
+    assert!(compressed_account.is_some(), "Account should exist");
+}
+```
+
+### Test Account Update
+
+```rust Test PDA Update
+#[tokio::test]
+async fn test_update_compressed_pda() {
+    // Create account first
+    let (mut rpc, account, account_meta) = setup_account().await;
+
+    // Get validity proof for existing account
+    let proof_result = rpc
+        .getValidityProofV0(
+            [{
+                hash: account.hash,
+                tree: account.treeInfo.tree,
+                queue: account.treeInfo.queue,
+            }],
+            [],
+        )
+        .await
+        .unwrap();
+
+    // New data
+    let new_nested_data = NestedData {
+        one: 10,
+        two: 20,
+        // ... other fields
+    };
+
+    // Build update instruction
+    let update_ix = update_compressed_account_instruction(
+        &program_id,
+        &payer.pubkey(),
+        proof_result,
+        account_meta,
+        new_nested_data,
+    );
+
+    // Execute
+    rpc.create_and_send_transaction(&[update_ix], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
+
+    // Verify update
+    let updated_account = rpc
+        .getCompressedAccount(bn(address.toBytes()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let decoded = decode_account_data(&updated_account.data.data);
+    assert_eq!(decoded.nested.one, 10);
+    assert_eq!(decoded.nested.two, 20);
+}
+```
+
+## Assertion Patterns
+
+### Type-Safe Account Assertions
+
+Use borsh deserialization for type-safe assertions:
+
+```rust Type-Safe Assertions
+use borsh::BorshDeserialize;
+use light_token_interface::state::Token;
+
+// Deserialize the account
+let token = Token::deserialize(&mut &account.data[..])
+    .expect("Failed to deserialize Token account");
+
+// Build expected account
+let expected_token = Token {
+    mint: mint_pubkey.to_bytes().into(),
+    owner: payer.pubkey().to_bytes().into(),
+    amount: 0,
+    delegate: None,
+    state: AccountState::Frozen,
+    is_native: None,
+    delegated_amount: 0,
+    close_authority: None,
+    account_type: ACCOUNT_TYPE_TOKEN_ACCOUNT,
+    extensions: token.extensions.clone(),
+};
+
+// Single assert comparing full account state
+assert_eq!(token, expected_token, "Token account should match expected");
+```
+
+<Warning>
+**Avoid Byte-Level Assertions**: Don't use magic byte offsets like `account.data[108]`. Always use proper deserialization for maintainable tests.
+</Warning>
+
+### Custom Assertion Helpers
+
+Create reusable assertion functions:
+
+```rust Assertion Helper
+use light_test_utils::RpcError;
+
+pub async fn assert_ctoken_transfer(
+    rpc: &mut impl Rpc,
+    source: Pubkey,
+    destination: Pubkey,
+    amount: u64,
+) {
+    let source_account = rpc
+        .get_account(source)
+        .await
+        .unwrap()
+        .expect("Source account should exist");
+
+    let dest_account = rpc
+        .get_account(destination)
+        .await
+        .unwrap()
+        .expect("Destination account should exist");
+
+    let source_token = Token::deserialize(&mut &source_account.data[..]).unwrap();
+    let dest_token = Token::deserialize(&mut &dest_account.data[..]).unwrap();
+
+    // Verify balances
+    assert!(
+        source_token.amount >= amount,
+        "Source should have sufficient balance"
+    );
+    assert_eq!(
+        dest_token.amount,
+        amount,
+        "Destination should receive correct amount"
+    );
+}
+```
+
+## Testing Error Conditions
+
+### Expected Failures
+
+```rust Test Error Cases
+#[tokio::test]
+#[should_panic(expected = "InsufficientFunds")]
+async fn test_transfer_insufficient_funds() {
+    let mut context = setup_transfer_test(None, 100).await.unwrap();
+    
+    // Try to transfer more than balance
+    let transfer_ix = build_transfer_instruction(
+        context.source_account,
+        context.destination_account,
+        1000, // More than balance
+        authority.pubkey(),
+    );
+
+    context
+        .rpc
+        .create_and_send_transaction(
+            &[transfer_ix],
+            &payer.pubkey(),
+            &[&payer, &authority],
+        )
+        .await
+        .unwrap(); // Should panic
+}
+```
+
+### Error Code Validation
+
+```rust Validate Error Codes
+use solana_sdk::transaction::TransactionError;
+
+#[tokio::test]
+async fn test_frozen_account_transfer() {
+    let mut context = setup_frozen_account().await;
+
+    let transfer_ix = build_transfer_instruction(
+        context.frozen_account,
+        context.destination_account,
+        100,
+        authority.pubkey(),
+    );
+
+    let result = context
+        .rpc
+        .create_and_send_transaction(
+            &[transfer_ix],
+            &payer.pubkey(),
+            &[&payer, &authority],
+        )
+        .await;
+
+    // Verify specific error
+    match result {
+        Err(e) => {
+            let error_code = extract_error_code(&e);
+            assert_eq!(error_code, TOKEN_ERROR_ACCOUNT_FROZEN);
+        }
+        Ok(_) => panic!("Transfer should have failed"),
+    }
+}
+```
+
+## TypeScript Testing
+
+### Anchor Test Setup
+
+```typescript TypeScript Test
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import {
+  createRpc,
+  bn,
+  sleep,
+  PackedAccounts,
+  SystemAccountMetaConfig,
+} from "@lightprotocol/stateless.js";
+import { expect } from "chai";
+
+describe("sdk-anchor-test", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.sdkAnchorTest;
+
+  it("create, update, and close compressed account", async () => {
+    let signer = new web3.Keypair();
+    let rpc = createRpc(
+      "http://127.0.0.1:8899",
+      "http://127.0.0.1:8784",
+      "http://127.0.0.1:3001"
+    );
+
+    // Airdrop
+    await rpc.requestAirdrop(signer.publicKey, web3.LAMPORTS_PER_SOL);
+    await sleep(2000);
+
+    // Get tree info
+    const existingTreeInfos = await rpc.getStateTreeInfos();
+    const stateTreeInfo = existingTreeInfos.find(
+      (info) => info.treeType === 2 || info.treeType === 3
+    );
+    const outputQueue = stateTreeInfo.queue;
+
+    const addressTreeInfo = await rpc.getAddressTreeInfoV2();
+    const addressTree = addressTreeInfo.tree;
+
+    // Create account
+    const name = "test-account";
+    await createCompressedAccount(
+      rpc,
+      addressTree,
+      address,
+      program,
+      outputQueue,
+      signer,
+      name
+    );
+    await sleep(2000);
+
+    // Verify creation
+    let compressedAccount = await rpc.getCompressedAccount(
+      bn(address.toBytes())
+    );
+    expect(compressedAccount).to.not.be.null;
+  });
+});
+```
+
+### Run TypeScript Tests
+
+```bash
+# Build Anchor program
+just build-sdk-anchor-test
+
+# Run tests
+cd sdk-tests/sdk-anchor-test && npm run test-ts
+```
+
+## CLI Testing Commands
+
+### Start Test Environment
+
+```bash
+# Start with all services
+light test-validator
+
+# Start without indexer
+light test-validator --skip-indexer
+
+# Start without prover
+light test-validator --skip-prover
+```
+
+### Run Tests
+
+<CodeGroup>
+
+```bash Unit Tests
+# Run specific package unit tests
+cargo test -p light-batched-merkle-tree
+cargo test -p light-sdk
+cargo test -p light-compressed-token-sdk
+```
+
+```bash Integration Tests
+# Run program integration tests
+cargo test-sbf -p account-compression-test
+cargo test-sbf -p system-test
+cargo test-sbf -p compressed-token-test
+
+# Run SDK integration tests
+cargo test-sbf -p sdk-anchor-test
+cargo test-sbf -p sdk-native-test
+cargo test-sbf -p sdk-token-test
+```
+
+```bash JavaScript Tests
+# Build and test
+just js::test-stateless
+just js::test-compressed-token
+just cli::test
+```
+
+</CodeGroup>
+
+## Test Organization
+
+### Directory Structure
+
+```
+light-protocol/
+├── program-libs/          # Unit tests: cargo test -p <package>
+│   ├── batched-merkle-tree/
+│   ├── compressed-account/
+│   └── hasher/
+├── program-tests/         # Integration tests: cargo test-sbf -p <package>
+│   ├── account-compression-test/
+│   ├── system-test/
+│   ├── compressed-token-test/
+│   └── utils/             # light-test-utils
+├── sdk-tests/            # SDK tests: cargo test-sbf -p <package>
+│   ├── sdk-anchor-test/
+│   ├── sdk-native-test/
+│   └── sdk-token-test/
+└── js/                   # TypeScript tests
+    ├── stateless.js/
+    └── compressed-token/
+```
+
+### Test Naming Conventions
+
+```rust Test Names
+// Feature test
+#[tokio::test]
+async fn test_create_compressed_account() { }
+
+// Error case
+#[tokio::test]
+async fn test_create_account_insufficient_funds() { }
+
+// Extension test
+#[tokio::test]
+async fn test_create_ctoken_with_frozen_default_state() { }
+
+// V1/V2 variants
+#[tokio::test]
+async fn test_transfer_v1() { }
+
+#[tokio::test]
+async fn test_transfer_v2() { }
+```
+
+## Debugging Tests
+
+### Enable Detailed Logging
+
+```bash
+# Full backtrace and logs
+RUST_BACKTRACE=1 cargo test-sbf -- --nocapture
+
+# Specific log levels
+RUST_LOG=debug cargo test-sbf -p my-test -- --nocapture
+
+# Prover client logging
+RUST_LOG=light_prover_client=debug cargo test-sbf
+```
+
+### Inspect Transactions
+
+With `RUST_BACKTRACE=1`, failed transactions show:
+- All account keys
+- Parsed instructions
+- Account data
+- Error details
+
+### Check Services
+
+```bash
+# Check prover
+curl http://localhost:3001/health
+
+# Check indexer
+curl http://localhost:8784/v1/health
+
+# Find and kill prover
+lsof -i:3001
+kill <pid>
+```
+
+## Best Practices
+
+<Steps>
+
+### Use Serial Tests for Shared State
+
+```rust
+use serial_test::serial;
+
+#[tokio::test]
+#[serial]
+async fn test_with_shared_state() {
+    // Test code
+}
+```
+
+### Clean Up After Tests
+
+```rust
+#[tokio::test]
+async fn test_with_cleanup() {
+    let mut rpc = setup_test().await;
+    
+    // Test code
+    
+    // Cleanup
+    close_all_accounts(&mut rpc).await;
+}
+```
+
+### Parameterize Tests
+
+```rust
+#[tokio::test]
+async fn test_transfer_amounts() {
+    for amount in [100, 1000, 10000] {
+        test_transfer_with_amount(amount).await;
+    }
+}
+```
+
+### Use Helper Functions
+
+```rust
+async fn create_test_token(
+    rpc: &mut LightProgramTest,
+    payer: &Keypair,
+) -> (Pubkey, Pubkey) {
+    // Common setup logic
+    (mint, token_account)
+}
+```
+
+</Steps>
+
+## Performance Testing
+
+### Measure Compute Units
+
+```rust
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
+
+#[tokio::test]
+async fn test_compute_units() {
+    let mut rpc = setup_test().await;
+    
+    // Request compute unit consumption
+    let compute_ix = ComputeBudgetInstruction::request_units_deprecated(
+        1_400_000,
+        0,
+    );
+    
+    let result = rpc
+        .create_and_send_transaction(
+            &[compute_ix, your_ix],
+            &payer.pubkey(),
+            &[&payer],
+        )
+        .await;
+    
+    // Check logs for actual consumption
+}
+```
+
+### Batch Operations
+
+```rust
+#[tokio::test]
+async fn test_batch_performance() {
+    let start = std::time::Instant::now();
+    
+    // Batch operations
+    for i in 0..100 {
+        create_compressed_account(&mut rpc, i).await;
+    }
+    
+    let duration = start.elapsed();
+    println!("Batch creation took: {:?}", duration);
+}
+```
+
+## Continuous Integration
+
+### GitHub Actions Example
+
+```yaml .github/workflows/test.yml
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          
+      - name: Install Solana
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+          
+      - name: Install Light CLI
+        run: npm install -g @lightprotocol/zk-compression-cli
+        
+      - name: Run unit tests
+        run: cargo test -p light-sdk
+        
+      - name: Run integration tests
+        run: cargo test-sbf -p system-test
+        env:
+          RUST_BACKTRACE: 1
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Compressed Tokens" icon="coins" href="/guides/compressed-tokens">
+  Learn token testing patterns
+</Card>
+
+<Card title="Compressed PDAs" icon="database" href="/guides/compressed-pdas">
+  Test compressed account patterns
+</Card>
+
+<Card title="Custom Programs" icon="code" href="/guides/custom-programs">
+  Build testable programs
+</Card>
+
+<Card title="CLI Reference" icon="terminal" href="/cli/overview">
+  CLI testing commands
+</Card>
+
+</CardGroup>
+
+## Resources
+
+- [light-program-test Documentation](https://docs.rs/light-program-test)
+- [Program Test Examples](https://github.com/Lightprotocol/light-protocol/tree/main/program-tests)
+- [SDK Test Examples](https://github.com/Lightprotocol/light-protocol/tree/main/sdk-tests)
+- [Test Utilities Source](https://github.com/Lightprotocol/light-protocol/tree/main/program-tests/utils)
