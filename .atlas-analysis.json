@@ -1,0 +1,158 @@
+{
+  "projectType": "framework",
+  "projectName": "Light Protocol",
+  "projectDescription": "The ZK Compression Protocol for Solana enables developers to create rent-free tokens and PDAs without sacrificing performance, security, or composability.",
+  "theme": "aspen",
+  "primaryColor": "#9945FF",
+  "lightColor": "#14F195",
+  "darkColor": "#9945FF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/zk-compression",
+              "concepts/architecture",
+              "concepts/compressed-accounts",
+              "concepts/merkle-trees",
+              "concepts/state-trees"
+            ]
+          },
+          {
+            "group": "Building with Light",
+            "pages": [
+              "guides/compressed-tokens",
+              "guides/compressed-pdas",
+              "guides/custom-programs",
+              "guides/testing"
+            ]
+          },
+          {
+            "group": "JavaScript SDK",
+            "pages": [
+              "sdk/stateless-js/overview",
+              "sdk/stateless-js/compressed-accounts",
+              "sdk/stateless-js/rpc-methods",
+              "sdk/compressed-token/overview",
+              "sdk/compressed-token/token-operations"
+            ]
+          },
+          {
+            "group": "Rust SDK",
+            "pages": [
+              "sdk/rust/overview",
+              "sdk/rust/sdk-libs",
+              "sdk/rust/program-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/overview",
+              "cli/test-validator",
+              "cli/commands"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Protocol Reference",
+        "groups": [
+          {
+            "group": "On-Chain Programs",
+            "pages": [
+              "programs/overview",
+              "programs/account-compression",
+              "programs/system",
+              "programs/compressed-token",
+              "programs/registry"
+            ]
+          },
+          {
+            "group": "ZK Prover",
+            "pages": [
+              "prover/overview",
+              "prover/server",
+              "prover/circuits"
+            ]
+          },
+          {
+            "group": "Forester Service",
+            "pages": [
+              "forester/overview",
+              "forester/running",
+              "forester/queue-management"
+            ]
+          },
+          {
+            "group": "Indexer",
+            "pages": [
+              "indexer/photon-overview"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Program Libraries",
+            "pages": [
+              "api/program-libs/account-checks",
+              "api/program-libs/batched-merkle-tree",
+              "api/program-libs/compressed-account",
+              "api/program-libs/hasher",
+              "api/program-libs/verifier"
+            ]
+          },
+          {
+            "group": "Program Instructions",
+            "pages": [
+              "api/instructions/compressed-token",
+              "api/instructions/system-program",
+              "api/instructions/account-compression"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "ZK Compression for rent-free state storage on Solana",
+    "Compressed tokens compatible with SPL Token standard",
+    "Compressed PDAs with program-derived addresses",
+    "Batched Merkle trees with ZK proof verification",
+    "TypeScript and Rust SDKs for client and program development",
+    "CLI tools for local development and testing",
+    "Off-chain ZK prover service with Groth16 SNARKs",
+    "Forester nodes for asynchronous queue management"
+  ],
+  "publicApiSurface": [
+    "@lightprotocol/stateless.js - JavaScript SDK for compressed accounts",
+    "@lightprotocol/compressed-token - JavaScript SDK for compressed tokens",
+    "@lightprotocol/zk-compression-cli - CLI tool for development",
+    "light-sdk - Rust SDK for program integration",
+    "light-client - Rust client for RPC queries",
+    "light-compressed-token - Compressed token program",
+    "light-system-program - Compressed account validation program",
+    "account-compression - Core compression program",
+    "light-registry - Protocol configuration program",
+    "light-prover-client - Rust client for ZK proof generation"
+  ]
+}
